@@ -1,0 +1,8 @@
+# ── Supabase client (repository layer, RPC calls) ─────────────────────────────
+supabase
+
+# ── Environment variables (.env support) ───────────────────────────────────────
+python-dotenv
+
+# ── Testing ─────────────────────────────────────────────────────────────────────
+pytest

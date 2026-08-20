@@ -1,0 +1,53 @@
+# Machine-readable twin of LOOP.md's human-gate policy for ApplyWizz
+# DicePilot. Schema matches @cobusgreyling/loop-gate (version, denylist,
+# maxFiles, autoMergeAllowlist) so `loop gate` can enforce this mechanically
+# if that tool is ever wired in — this file is useful as documented policy
+# even without it.
+#
+# Auto-merge is disabled for V1: autoMergeAllowlist below only covers
+# docs/tests, so a `--action auto-merge` check against any real code path
+# (dice/, db/, supabase/migrations/, existing Indeed files, etc.) fails the
+# allowlist check and escalates for human review. There is no scenario in
+# V1 where product or schema code auto-merges.
+version: 1
+
+denylist:
+  # Secrets / credentials — never auto-touched, never committed.
+  - ".env"
+  - ".env.*"
+  - "**/*service_role*"
+  - "**/*SERVICE_ROLE*"
+  - "**/*_key*"
+  - "**/*_secret*"
+  - "**/secrets/**"
+  - "**/credentials/**"
+
+  # Existing Indeed production paths — Phase work must not touch these
+  # except for an explicitly-explained shared-config change.
+  - "main.py"
+  - "app.py"
+  - "scraper_engine.py"
+  - "scrape_*.py"
+  - "templates/**"
+  - "karmafy_jobrole.csv"
+  - ".github/workflows/**"
+
+  # DicePilot source-of-truth specs — reference only, never overwritten.
+  - "*.pdf"
+
+  # Applied database state — migrations are reviewed and pushed by a human
+  # decision (supabase db push), never by an automated action.
+  - "supabase/migrations/**"
+
+# Escalate instead of proceeding when a change touches more than this many
+# files — sized to a normal phase-sized batch (Phase 1 touched ~10 new
+# files); anything larger is unusual enough to warrant a second look.
+maxFiles: 15
+
+# --action auto-merge only proceeds if every changed path matches one of
+# these. Deliberately narrow: no dice/, db/, or migrations path is ever
+# eligible for auto-merge in V1.
+autoMergeAllowlist:
+  - "docs/**"
+  - "**/*.md"
+  - "tests/**"
