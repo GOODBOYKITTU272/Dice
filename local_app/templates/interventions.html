@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>DicePilot — Interventions (Phase 4F)</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f8fafc;
+    color: #111827;
+    margin: 0;
+    padding: 2rem;
+  }
+  .container { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+  .subtitle { color: #6b7280; margin-bottom: 1.5rem; font-size: 0.9rem; }
+  .card {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    padding: 1.25rem;
+    margin-bottom: 1rem;
+  }
+  .card h2 { font-size: 1.05rem; margin: 0 0 0.4rem; }
+  .meta { color: #6b7280; font-size: 0.85rem; margin-bottom: 0.6rem; }
+  .prompt { font-weight: 600; margin-bottom: 0.4rem; }
+  .reason { font-size: 0.9rem; color: #374151; margin-bottom: 0.6rem; }
+  .badge {
+    display: inline-block;
+    font-size: 0.75rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 999px;
+    background: #fef3c7;
+    color: #92400e;
+    margin-right: 0.4rem;
+  }
+  .badge.sensitive { background: #fee2e2; color: #991b1b; }
+  form.resolve { display: flex; gap: 0.5rem; margin-top: 0.6rem; flex-wrap: wrap; }
+  form.resolve input, form.resolve select {
+    border: 1px solid #d1d5db;
+    border-radius: 0.375rem;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.85rem;
+    flex: 1;
+    min-width: 200px;
+  }
+  form.resolve button {
+    background: #1d4ed8;
+    color: #fff;
+    border: none;
+    border-radius: 0.375rem;
+    padding: 0.4rem 0.9rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .empty { color: #6b7280; font-size: 0.9rem; }
+  .error { color: #991b1b; background: #fee2e2; padding: 0.75rem 1rem; border-radius: 0.375rem; margin-bottom: 1rem; }
+  .note { font-size: 0.8rem; color: #6b7280; margin-top: 2rem; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Open Interventions</h1>
+  <p class="subtitle">Questions Phase 4D couldn't answer automatically, waiting on a human. Resolving here only records the answer for later use — it never fills or submits anything on Dice.</p>
+
+  {% if error %}
+  <div class="error">Could not load interventions: {{ error }}</div>
+  {% endif %}
+
+  {% if not interventions and not error %}
+  <p class="empty">No open interventions right now.</p>
+  {% endif %}
+
+  {% for iv in interventions %}
+  <div class="card">
+    <h2>{{ iv.job_title or "Unknown job" }}{% if iv.company_name %} — {{ iv.company_name }}{% endif %}</h2>
+    <div class="meta">application {{ iv.application_id }} · intervention {{ iv.intervention_id }} · type {{ iv.field_type or "UNKNOWN" }}</div>
+    <div>
+      {% if iv.sensitivity %}<span class="badge sensitive">SENSITIVE</span>{% endif %}
+      <span class="badge">{{ iv.status }}</span>
+    </div>
+    <p class="prompt">{{ iv.question_prompt or "(no prompt captured)" }}</p>
+    <p class="reason">Reason: {{ iv.reason or "not recorded" }}</p>
+    <form class="resolve" method="post" action="/interventions/{{ iv.intervention_id }}/resolve">
+      {% if iv.choices %}
+      <select name="answer" required>
+        <option value="" disabled selected>Choose an answer…</option>
+        {% for choice in iv.choices %}
+        <option value="{{ choice }}">{{ choice }}</option>
+        {% endfor %}
+      </select>
+      {% else %}
+      <input type="text" name="answer" placeholder="Answer (free text)" required>
+      {% endif %}
+      <button type="submit">Resolve</button>
+    </form>
+  </div>
+  {% endfor %}
+
+  <p class="note">Internal operator view only — not candidate-facing. Local only; nothing here talks to Dice.</p>
+</div>
+</body>
+</html>

@@ -393,3 +393,23 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-22T01:00:00Z",
+  "phase": "Phase 4F -- NEEDS_INPUT / Pause-Resume Foundation",
+  "task": "Build the state layer that lets DicePilot stop safely on a question it can't answer, record what's needed, and resume later without guessing. Audited the existing Phase 1 schema/repository first per explicit instruction.",
+  "schema_audit": "applications/application_events/interventions already cover nearly everything needed. Two gaps: no RESUMABLE value in applications.status's CHECK constraint (solved by computing it at read time in compute_application_readiness(), never persisted -- no migration); no dedicated columns for question_id/field_type/reason/sensitivity on interventions (solved by packing them into the existing options jsonb column; answer_source reuses the existing answered_by column; candidate_id/dice_job_id deliberately not duplicated -- read via the existing application_id FK). Net: zero schema migration.",
+  "bug_found_and_fixed_with_tdd": "application_repository.create_intervention() always tries to transition the application to NEEDS_INPUT, which fails (NEEDS_INPUT -> NEEDS_INPUT isn't modeled) when a second, different question blocks an application already NEEDS_INPUT from a first one. Fixed in db/intervention_repository.py: insert the intervention row directly (skip the redundant transition) when the application is already NEEDS_INPUT.",
+  "live_validation": "Full NEEDS_INPUT -> resolved -> RESUMABLE cycle run against the real linked Supabase project using a disposable TEST-prefixed job/application, cleaned up immediately after (verified empty). No Dice.com interaction anywhere in this phase.",
+  "local_ui_added": "/interventions route + template: open interventions with job/company, prompt, reason, sensitivity badge, local-only resolve form. Capped to 20 most recent -- see backlog note about 70 accumulated OPEN interventions from past sessions making an uncapped view impractically slow (35s).",
+  "backlog_note_added": "Linked Supabase project has 631 TEST-prefixed dice_jobs rows and 70 OPEN interventions accumulated from past test runs that were never cleaned up, despite earlier STATE.md claims otherwise. Not solved this session -- only this session's own rows were cleaned up (verified). Worth a dedicated cleanup pass before Phase 6.",
+  "tdd_note": "Implementation moved aside first, confirmed ModuleNotFoundError (red for the right reason); restored, then the NEEDS_INPUT-transition bug above was caught by the tests themselves and fixed.",
+  "tests_run": "273 passed, 0 failed, 0 skipped (245 baseline + 28 new: 21 intervention repo, 3 boundary, 1 live integration, 3 local UI)",
+  "production_code_changed": true,
+  "files_changed": ["db/intervention_repository.py", "tests/test_intervention_repository.py", "tests/test_intervention_repository_integration.py", "tests/test_phase4f_boundary.py", "tests/test_local_app.py", "tests/conftest.py", "local_app/app.py", "local_app/templates/interventions.html", "STATE.md"],
+  "human_gate_result": "pending -- final report delivered this session, awaiting review",
+  "next_action": "Phase 5 submission verification not yet implemented per explicit instruction. Also still open: wiring Candidate Adapter -> Question Engine -> Intervention together (currently three separate, unconnected pieces), and the 631-row Supabase test-data cleanup backlog.",
+  "outcome": "phase-complete"
+}
+```

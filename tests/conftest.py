@@ -212,6 +212,22 @@ def fake_repo(monkeypatch):
 
 
 @pytest.fixture
+def fake_intervention_repo(monkeypatch):
+    """Same in-memory fake Supabase client as fake_repo, but shared
+    between db.application_repository and db.intervention_repository so
+    Phase 4F's module sees the same rows the lower-level repo writes.
+    Returns db.intervention_repository; import db.application_repository
+    separately for setup (upsert_dice_job/enqueue_application/etc.)."""
+    import db.application_repository as app_repo
+    import db.intervention_repository as iv_repo
+
+    client = FakeSupabaseClient()
+    monkeypatch.setattr(app_repo, "get_supabase_client", lambda: client)
+    monkeypatch.setattr(iv_repo, "get_supabase_client", lambda: client)
+    return iv_repo
+
+
+@pytest.fixture
 def live_client():
     """Real Supabase client for the linked DicePilot project.
 

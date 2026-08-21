@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 4E Candidate Adapter built: dice/candidate_adapter.py normalizes the existing ApplyWizz candidate-details API response {client, additional_information} into CandidateProfile, per 02_ApplyWizz_DicePilot_TRD.pdf section 7's mapping table. Data read + normalization only -- no browser logic, no question answering, no submission. Unknowns preserved as None throughout, never defaulted. Live validation BLOCKED: APPLYWIZZ_API_BASE_URL/APPLYWIZZ_API_TOKEN are not configured anywhere in this environment -- documented in .env.example, not fabricated. Question auto-answering: NOT BUILT. NEEDS_INPUT handling: NOT BUILT. Submission: NOT BUILT.)
+Last run: 2026-08-21 (Phase 4F NEEDS_INPUT pause/resume built on the existing Phase 1 schema -- no migration, no second orchestration store. db/intervention_repository.py adds create_or_get_question_intervention() (idempotent, dedupes on application_id+question_id), resolve_question_intervention() (rejects invalid radio answers, preserves free text verbatim, resolves exactly once), and compute_application_readiness() (derives READY/RUNNING/NEEDS_INPUT/RESUMABLE/FAILED/SUBMITTED -- RESUMABLE is computed, never persisted, since the schema has no such status value). Live-verified end to end (NEEDS_INPUT -> resolved -> RESUMABLE) against the real linked Supabase project with disposable TEST- rows, cleaned up after. Local operator view added at /interventions (read + local-only resolve form, never touches Dice). Auto-answering: NOT BUILT. Submission: NOT BUILT.)
 
 ## V1 Delivery Board
 
@@ -18,7 +18,7 @@ Last run: 2026-08-21 (Phase 4E Candidate Adapter built: dice/candidate_adapter.p
 | Phase 4C — Easy Apply Navigation + Resume | COMPLETE — Easy Apply + resume replacement both live-verified end to end |
 | Phase 4D — Application Question Engine | EXTRACTION FOUNDATION COMPLETE — NO_QUESTIONS_PRESENT and Review-screen detection live-verified; RADIO/TEXTAREA live-observed + offline-replay verified; select/date/checkbox-as-question/multi-select not yet observed live; auto-answering not built |
 | Phase 4E — Candidate Adapter | COMPLETE — normalization built and offline-verified; live fetch BLOCKED (APPLYWIZZ_API_BASE_URL/APPLYWIZZ_API_TOKEN not configured) |
-| Phase 4F — NEEDS_INPUT / Pause-Resume | NOT STARTED |
+| Phase 4F — NEEDS_INPUT / Pause-Resume | COMPLETE — live-verified end to end against real Supabase; auto-answering/submission not built |
 | Phase 5 — Submission Verification | NOT STARTED |
 | Phase 6 — Sequential Worker | NOT STARTED |
 | Phase 7 — 20-Job End-to-End V1 | NOT STARTED |
@@ -32,11 +32,33 @@ Last run: 2026-08-21 (Phase 4E Candidate Adapter built: dice/candidate_adapter.p
 
 ## Current Phase
 
-Phase 4E Candidate Adapter — **COMPLETE** (offline). `dice/candidate_adapter.py` normalizes the existing ApplyWizz candidate-details API response into `CandidateProfile`, per the TRD's Candidate Adapter Rules table, with unknowns preserved as `None` throughout — never defaulted, never guessed. Data read + normalization only: no Dice browser logic, no question answering, no submission. Live fetch against the real API is **BLOCKED** — `APPLYWIZZ_API_BASE_URL`/`APPLYWIZZ_API_TOKEN` aren't configured anywhere in this environment; documented in `.env.example`, not fabricated.
+Phase 4F NEEDS_INPUT / Pause-Resume — **COMPLETE**. `db/intervention_repository.py` gives Phase 4D's `NEEDS_INPUT`/`SENSITIVE_NEEDS_INPUT`/`UNSUPPORTED` questions a safe stop-and-record path, built entirely on the existing Phase 1 schema (`applications`, `application_events`, `interventions`) — no migration, no second orchestration store. Live-verified end to end (`NEEDS_INPUT` → resolved → `RESUMABLE`) against the real linked Supabase project.
 
 ## Next Phase
 
-Not yet approved. Phase 4F (`NEEDS_INPUT` / pause-resume handling for the questions that can't be auto-answered — on-site willingness, expected salary, plus the three sensitive fields `resolve_candidate_field()` explicitly refuses to resolve) is the next required capability before auto-answering can exist. Auto-answering itself, submission verification (Phase 5) remain explicitly **not started**.
+Not yet approved. Phase 5 (submission verification) and the rest of Phase 4D (real answer-resolution wiring — Candidate Adapter → Question Engine → Intervention, currently three separate, unconnected pieces) remain explicitly **not started**. Auto-answering has still never been implemented anywhere in this repo.
+
+## Phase 4F — NEEDS_INPUT / Pause-Resume Foundation (2026-08-21)
+
+**Schema audit** (per explicit instruction to audit before building): the existing Phase 1 schema already covers nearly everything this phase needs. `applications.status` already has a `NEEDS_INPUT` value; `interventions` already has `application_id`, `type`, `intervention_scope`, `question_text`, `options` (jsonb), `status`, `answer` (jsonb), `answered_by`, `created_at`, `resolved_at`; `db/application_repository.py` already had working `create_intervention()`/`resolve_intervention()`/`update_application_status()`/`add_event()` from Phase 1. Two genuine gaps found:
+1. No `RESUMABLE` value exists in `applications.status`'s CHECK constraint. Rather than migrate the live schema for one derived state, `compute_application_readiness()` computes `RESUMABLE` at **read time** (`NEEDS_INPUT` status + zero remaining `OPEN` interventions) without ever writing it to the database — the stored `status` stays `NEEDS_INPUT` until a future worker (not built) explicitly transitions it to `PROCESSING` to actually resume.
+2. `question_id`/`field_type`/`reason`/`sensitivity` have no dedicated typed columns on `interventions`. Rather than add columns, these are packed into the existing `options` jsonb column as a structured wrapper (`{"question_id", "field_type", "reason", "sensitivity", "choices"}`), and `answer_source` reuses the existing `answered_by` column. `candidate_id`/`dice_job_id` are deliberately **not** duplicated onto interventions — they already live on the parent `applications` row, reachable via the existing `application_id` FK.
+
+Net result: **zero schema migration**, full reuse of Phase 1's repository layer.
+
+**`db/intervention_repository.py`** (new): `create_or_get_question_intervention()` is idempotent by check-before-insert on `(application_id, question_id)` — a worker restart re-encountering the same blocking question recovers the existing row rather than duplicating it. A real bug found via TDD: the underlying `create_intervention()` always tries to transition the application to `NEEDS_INPUT`, which fails (`NEEDS_INPUT` → `NEEDS_INPUT` isn't a modeled transition) when a *second*, different question blocks an application that's already `NEEDS_INPUT` from a first one — fixed by inserting the row directly (skipping the redundant transition) when the application is already `NEEDS_INPUT`. `resolve_question_intervention()` rejects an answer not in the intervention's recorded `RADIO` choices, preserves free text verbatim (no trimming, no rewriting), and raises rather than silently re-resolving an already-`ANSWERED` intervention. Always `APPLICATION_LEVEL` scope — a question blocks only its own application, never the whole candidate/browser session (unchanged Phase 1 semantics for `SESSION_LEVEL`).
+
+**Local operator UI**: `/interventions` (new route) lists open interventions — job/company, question prompt, reason, sensitivity badge, a local-only resolve form (select for `RADIO` choices, free text otherwise). Resolving here only calls `resolve_question_intervention()` — it never opens a Dice page, never fills or clicks anything there. Capped to the 20 most recent open interventions: the linked Supabase project has accumulated **70 `OPEN` interventions from past test sessions that were never cleaned up** (a real, pre-existing gap, not something this phase caused — recorded below, not fixed now), and the page's per-row job/application lookups made an uncapped view impractically slow (35s) against that backlog.
+
+**Live validation**: full `NEEDS_INPUT` → resolved → `RESUMABLE` cycle run against the real linked Supabase project (`test_intervention_repository_integration.py`), using a disposable `TEST-`-prefixed job/application, cleaned up immediately after each run (verified empty). Confirmed the restart-recovery/dedupe behavior against real Postgres, not just the in-memory fake client. No Dice.com interaction anywhere in this phase.
+
+**Tests**: 245 baseline → **273 passed, 0 failed, 0 skipped** (21 in `test_intervention_repository.py`, 3 in `test_phase4f_boundary.py`, 1 live integration test, 3 in `test_local_app.py`). TDD: implementation moved aside first, confirmed `ModuleNotFoundError` (red for the right reason); restored, then one real behavioral bug (the `NEEDS_INPUT`→`NEEDS_INPUT` transition failure above) was caught by the tests themselves and fixed.
+
+Decision gate: **PHASE 4F: COMPLETE.**
+
+## Backlog / Risk Note — Accumulated Stale Test Rows in Live Supabase (2026-08-21)
+
+Not solved this session, recorded only. The linked Supabase project (`pkuqcnvtweukgurisczw`) has **631 `TEST-`-prefixed `dice_jobs` rows and 70 `OPEN` interventions** accumulated from past integration-test runs across earlier phases that were never cleaned up, despite `STATE.md`'s own Phase 1 notes claiming "test rows cleaned up after every run." Only the exact rows this session's own tests created were cleaned up here (verified empty afterward) — the pre-existing backlog was left alone as out of scope for this phase. Worth a dedicated cleanup pass before this project needs the `interventions`/`dice_jobs` tables to reflect only real data (e.g. before Phase 6's sequential worker starts reading from them).
 
 ## Phase 4E — Candidate Adapter (2026-08-21)
 

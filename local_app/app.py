@@ -17,8 +17,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from flask import Flask, jsonify, render_template, request  # noqa: E402
+from flask import Flask, jsonify, redirect, render_template, request, url_for  # noqa: E402
 
+from db.intervention_repository import (  # noqa: E402
+    AlreadyResolvedError,
+    InterventionNotFoundError,
+    InvalidAnswerError,
+    resolve_question_intervention,
+)
+from db.supabase_client import get_supabase_client  # noqa: E402
 from dice.discovery import run_discovery  # noqa: E402
 
 app = Flask(__name__)
@@ -42,7 +49,7 @@ DELIVERY_BOARD = [
     ("Phase 4C — Easy Apply + Resume", "COMPLETE"),
     ("Phase 4D — Question Engine", "EXTRACTION FOUNDATION COMPLETE — RADIO/TEXTAREA live-observed + offline-replay verified; select/date/checkbox/multi-select not yet observed"),
     ("Phase 4E — Candidate Adapter", "COMPLETE (offline) — live fetch BLOCKED, APPLYWIZZ_API_BASE_URL/TOKEN not configured"),
-    ("Phase 4F — NEEDS_INPUT", "NOT STARTED"),
+    ("Phase 4F — NEEDS_INPUT", "COMPLETE — live-verified NEEDS_INPUT -> resolved -> RESUMABLE, no schema migration"),
     ("Phase 5 — Submission Verification", "NOT STARTED"),
     ("Phase 6 — Sequential Worker", "NOT STARTED"),
     ("Phase 7 — 20-Job End-to-End", "NOT STARTED"),
@@ -68,8 +75,13 @@ BROWSER_STATUS = [
     ("Multi-select", "NOT LIVE VERIFIED"),
     ("Candidate source", "ApplyWizz existing candidate-details API"),
     ("Duplicate candidate truth store", "NO"),
+    ("Pause on unknown", "VERIFIED"),
+    ("Intervention dedupe", "VERIFIED"),
+    ("Human resolution", "VERIFIED"),
+    ("Resume eligibility", "VERIFIED"),
+    ("External notification", "NOT BUILT"),
+    ("Live Dice answer filling", "NOT BUILT"),
     ("Auto-answering", "NOT BUILT"),
-    ("NEEDS_INPUT", "NOT BUILT"),
     ("Submission", "NOT BUILT"),
 ]
 
@@ -83,6 +95,77 @@ def index():
         delivery_board=DELIVERY_BOARD,
         browser_status=BROWSER_STATUS,
     )
+
+
+@app.route("/interventions")
+def interventions_view():
+    """Read-mostly Phase 4F operator view: open interventions (questions
+    Phase 4D couldn't answer automatically), with a local-only resolve
+    form. Never talks to Dice -- resolving here only records an answer
+    in Supabase for a later phase to consume."""
+    try:
+        client = get_supabase_client()
+        # Capped, not because V1 expects many open interventions, but
+        # because the linked project has accumulated OPEN rows from past
+        # test runs that were never cleaned up (a pre-existing gap, not
+        # something this phase caused or fixes) -- without a cap this
+        # view's N+1 job/application lookups make the page impractically
+        # slow.
+        open_interventions = (
+            client.table("interventions")
+            .select("*")
+            .eq("status", "OPEN")
+            .order("created_at", desc=True)
+            .limit(20)
+            .execute()
+            .data
+        )
+    except Exception as exc:  # noqa: BLE001 - surfaced to the operator, not swallowed
+        return render_template("interventions.html", interventions=[], error=str(exc))
+
+    rows = []
+    for iv in open_interventions:
+        app_rows = client.table("applications").select("*").eq("id", iv["application_id"]).execute().data
+        application = app_rows[0] if app_rows else {}
+        job = {}
+        if application.get("dice_job_id"):
+            job_rows = (
+                client.table("dice_jobs")
+                .select("title, company_name")
+                .eq("id", application["dice_job_id"])
+                .execute()
+                .data
+            )
+            job = job_rows[0] if job_rows else {}
+        options = iv.get("options") or {}
+        rows.append(
+            {
+                "intervention_id": iv["id"],
+                "application_id": iv["application_id"],
+                "job_title": job.get("title"),
+                "company_name": job.get("company_name"),
+                "question_prompt": iv.get("question_text"),
+                "field_type": options.get("field_type"),
+                "reason": options.get("reason"),
+                "sensitivity": bool(options.get("sensitivity")),
+                "choices": options.get("choices"),
+                "status": iv["status"],
+            }
+        )
+    return render_template("interventions.html", interventions=rows, error=None)
+
+
+@app.route("/interventions/<intervention_id>/resolve", methods=["POST"])
+def resolve_intervention_view(intervention_id):
+    """Local/internal only -- records a human-supplied answer against one
+    intervention. Never fills or clicks anything on Dice; a later phase
+    consumes the resolved answer."""
+    answer = (request.form.get("answer") or "").strip()
+    try:
+        resolve_question_intervention(intervention_id, answer, source="operator")
+    except (InvalidAnswerError, AlreadyResolvedError, InterventionNotFoundError):
+        pass  # surfaced implicitly: the intervention stays listed if unresolved
+    return redirect(url_for("interventions_view"))
 
 
 @app.route("/api/discover", methods=["POST"])
