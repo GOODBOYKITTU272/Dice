@@ -448,3 +448,21 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-22T03:00:00Z",
+  "phase": "Phase 5.2 -- Controlled Retry, Genuine Live Submission (MILESTONE)",
+  "task": "Auth consistency audit (home/fresh job page/one more fresh page load, all read ACTIVE this time -- unlike the earlier inconsistency, cause still unconfirmed), then re-validate the Yashnee application before a controlled retry, per the user's explicit Phase 5 retry-plan instructions.",
+  "unexpected_finding": "The original wizard tab had closed itself after the first failed attempt. Re-opening via Dice's own 'Continue Application' button restarted the wizard at Step 1 of 3 rather than resuming at Review. The salary answer had persisted ('50000'), but the on-site-willingness question came back unanswered -- a genuine NEEDS_INPUT block, not fabricated. Per Phase 4D/4F's own rules, this was not guessed: the user was asked directly and explicitly said 'Yes', which the user then entered live in the browser themselves (this session's automation was blocked by the same environment permission classifier for this action too, same as the Submit click -- not worked around).",
+  "result": "With auth reconfirmed ACTIVE, no challenge, correct resume, zero unresolved interventions, and explicit one-time approval, the user clicked Submit directly. Dice responded with its real success page: URL '.../wizard/success', title 'Application Success | Dice.com', H2 'Hooray! Your application is on its way!' Correctly classified VERIFIED_SUBMITTED against real, scoped evidence -- DicePilot's first genuine, live, verified Dice application submission.",
+  "bug_found_and_fixed_with_tdd": "The real success URL ('.../wizard/success') still contains the substring '/wizard', so the original \"'/wizard' not in url\" check would have misclassified a genuine success as still-on-the-wizard (VERIFICATION_UNCERTAIN instead of VERIFIED_SUBMITTED). Replaced with _has_left_wizard(): checks the URL path doesn't END in '/wizard', handles trailing slashes/query strings/fragments. Also added the real observed phrase 'your application is on its way' to _CONFIRMATION_PHRASES.",
+  "no_db_fabrication": "No Supabase applications/application_events row was created for this submission -- it was an ad-hoc live test outside the not-yet-built orchestrator, and retroactively writing one would misrepresent it as having gone through a real queue-claim lifecycle. Recorded here and in STATE.md as a narrative fact only.",
+  "tests_run": "311 passed, 0 failed, 0 skipped (305 baseline + 6 new: 1 real-success regression test using the exact live text/URL, 5 _has_left_wizard unit tests)",
+  "production_code_changed": true,
+  "files_changed": ["dice_browser/submission.py", "tests/test_dice_browser_submission.py", "STATE.md", "local_app/app.py"],
+  "human_gate_result": "Genuine live success achieved with explicit, staged human authorization at every mutating step (answering the question, clicking Submit) -- no auto-retry, no automation workaround of the environment's permission block",
+  "next_action": "Phase 6 (sequential worker) and wiring Candidate Adapter -> Question Engine -> Intervention -> Submission together are the next open items, not yet started.",
+  "outcome": "phase-complete"
+}
+```

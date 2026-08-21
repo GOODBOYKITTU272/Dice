@@ -44,6 +44,12 @@ _CONFIRMATION_PHRASES = (
     "you've successfully applied",
     "you have successfully applied",
     "you're all set",
+    # Live-verified (2026-08-21, job 05fde651-c3ae-40e3-b348-ad1c9e9a6459,
+    # Java Developer @ Yashnee Tech Solutions, second attempt after
+    # answering the previously-unanswered onsite question): Dice's real
+    # success page, title "Application Success | Dice.com", visible H2
+    # "Hooray! Your application is on its way!"
+    "your application is on its way",
 )
 
 # Live-verified (2026-08-21, job 05fde651-c3ae-40e3-b348-ad1c9e9a6459, Java
@@ -91,6 +97,17 @@ def _result(
         before_url=before_url,
         after_url=after_url if after_url is not None else before_url,
     )
+
+
+def _has_left_wizard(url: str) -> bool:
+    """True only when the URL path no longer ENDS in "/wizard" -- not
+    merely "no longer contains the substring". Real live bug found
+    2026-08-21: Dice's genuine success URL is ".../wizard/success", which
+    still contains "/wizard" as a substring, so the original
+    "'/wizard' not in url" check misclassified a real success as still
+    on the wizard. Query strings/fragments are stripped before checking."""
+    path = url.split("?")[0].split("#")[0].rstrip("/")
+    return not path.endswith("/wizard")
 
 
 def _scoped_text_matching(page: Page, phrases: tuple[str, ...]) -> str | None:
@@ -258,7 +275,7 @@ def _classify_post_submit(
             after_url,
         )
 
-    left_wizard = "/wizard" not in after_url
+    left_wizard = _has_left_wizard(after_url)
 
     if confirmation_text and left_wizard:
         return _result(

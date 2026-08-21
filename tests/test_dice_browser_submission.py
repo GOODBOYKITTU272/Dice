@@ -4,23 +4,22 @@ work correctly -- about:blank's cross-origin pushState quirk, same
 workaround already used in test_dice_browser_easy_apply.py). No live Dice
 needed for any of these.
 
-Zero live "Submit clicked -> confirmed success" evidence exists yet as of
-this file's creation -- every success-path fixture below models a
-plausible shape against Dice's established UI conventions (headings,
-role=status regions, the same wizard-URL pattern seen everywhere else in
-this codebase), not a live-verified page. The actual live confirmation
-shape may differ; that's exactly why VERIFIED_SUBMITTED requires strong,
-scoped evidence and everything weaker falls to VERIFICATION_UNCERTAIN
-rather than a guess.
+Most success-path fixtures below still model a plausible shape against
+Dice's established UI conventions (headings, role=status regions), not a
+live-verified page -- that's why VERIFIED_SUBMITTED requires strong,
+scoped evidence and everything weaker falls to VERIFICATION_UNCERTAIN.
 
-The FAILURE fixture (test_explicit_dice_failure_modal_is_submit_failed)
-IS live-verified: a real Submit click on job 05fde651-c3ae-40e3-b348-
-ad1c9e9a6459 (Java Developer @ Yashnee Tech Solutions) on 2026-08-21
-produced exactly this modal -- heading "Whoops! There was an issue
-submitting your application.", body "We were unable to submit your
-application. Please try again.", OK/Go to Search/Return to Job Details
-buttons. No application was submitted; Dice's own explicit message is the
-evidence.
+Two fixtures ARE live-verified: test_explicit_dice_failure_modal_is_submit_failed
+and test_real_dice_success_page_is_verified_submitted. Both come from two
+real Submit clicks on job 05fde651-c3ae-40e3-b348-ad1c9e9a6459 (Java
+Developer @ Yashnee Tech Solutions) on 2026-08-21 -- the first (before
+the onsite question was answered) produced Dice's own explicit failure
+modal, "Whoops! There was an issue submitting your application." / "We
+were unable to submit your application. Please try again."; the second
+(after answering) produced the genuine success page, URL
+".../wizard/success", title "Application Success | Dice.com", H2 "Hooray!
+Your application is on its way!" No application was submitted in the
+first case; the second genuinely was.
 """
 from __future__ import annotations
 
@@ -28,7 +27,7 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 from dice_browser.models import SubmissionStatus
-from dice_browser.submission import SubmitPreconditions, submit_application
+from dice_browser.submission import SubmitPreconditions, _has_left_wizard, submit_application
 
 JOB_URL = "https://www.dice.com/job-applications/TESTJOB123/wizard"
 JOB_FRAGMENT = "TESTJOB123"
@@ -47,6 +46,29 @@ def page(browser):
     pg = browser.new_page()
     yield pg
     pg.close()
+
+
+# ── _has_left_wizard: real live bug regression ────────────────────────────
+
+
+def test_has_left_wizard_true_for_real_success_url():
+    assert _has_left_wizard("https://www.dice.com/job-applications/x/wizard/success") is True
+
+
+def test_has_left_wizard_false_while_still_on_wizard():
+    assert _has_left_wizard("https://www.dice.com/job-applications/x/wizard") is False
+
+
+def test_has_left_wizard_false_while_still_on_wizard_with_trailing_slash():
+    assert _has_left_wizard("https://www.dice.com/job-applications/x/wizard/") is False
+
+
+def test_has_left_wizard_true_for_unrelated_page():
+    assert _has_left_wizard("https://www.dice.com/dashboard/applications") is True
+
+
+def test_has_left_wizard_ignores_query_string_and_fragment():
+    assert _has_left_wizard("https://www.dice.com/job-applications/x/wizard?ref=abc#top") is False
 
 
 def _clean_preconditions() -> SubmitPreconditions:
@@ -106,6 +128,28 @@ def test_explicit_dice_failure_modal_is_submit_failed(page):
     result = _submit(page, poll_timeout_seconds=1, poll_interval_seconds=0.1)
     assert result.status == SubmissionStatus.SUBMIT_FAILED
     assert "issue submitting your application" in result.evidence["failure_text"].lower()
+
+
+# Real live regression (2026-08-21, same job, second attempt after
+# answering the previously-unanswered onsite question): a real Submit
+# click produced Dice's genuine success page. URL became
+# ".../wizard/success" -- title "Application Success | Dice.com", visible
+# H2 "Hooray! Your application is on its way! \U0001F973". Critical real
+# bug this fixture caught: ".../wizard/success" still CONTAINS the
+# substring "/wizard", so the original "/wizard" not in after_url check
+# would have misclassified a genuine success as still-on-wizard.
+def test_real_dice_success_page_is_verified_submitted(page):
+    onclick = (
+        "history.replaceState({}, '', '/job-applications/TESTJOB123/wizard/success');"
+        "document.title = 'Application Success | Dice.com';"
+        "document.body.innerHTML = '<h2>Hooray! Your application is on its way!</h2>"
+        "<p>You can find the job listing for this role in your Applied Jobs.</p>';"
+    )
+    _load(page, _review_page(submit_onclick=onclick))
+    result = _submit(page, poll_timeout_seconds=2, poll_interval_seconds=0.2)
+    assert result.status == SubmissionStatus.VERIFIED_SUBMITTED
+    assert "on its way" in result.evidence["confirmation_text"].lower()
+    assert "/wizard/success" in result.after_url
 
 
 # 1. Submit click alone -> NOT enough

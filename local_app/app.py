@@ -50,7 +50,7 @@ DELIVERY_BOARD = [
     ("Phase 4D — Question Engine", "EXTRACTION FOUNDATION COMPLETE — RADIO/TEXTAREA live-observed + offline-replay verified; select/date/checkbox/multi-select not yet observed"),
     ("Phase 4E — Candidate Adapter", "COMPLETE (offline) — live fetch BLOCKED, APPLYWIZZ_API_BASE_URL/TOKEN not configured"),
     ("Phase 4F — NEEDS_INPUT", "COMPLETE — live-verified NEEDS_INPUT -> resolved -> RESUMABLE, no schema migration"),
-    ("Phase 5 — Submission Verification", "IMPLEMENTED, LIVE-EXERCISED — 1 live attempt correctly ended SUBMIT_FAILED (Dice's own error), not a false SUBMITTED"),
+    ("Phase 5 — Submission Verification", "LIVE VERIFIED — real Dice application submitted end to end (job 05fde651...)"),
     ("Phase 6 — Sequential Worker", "NOT STARTED"),
     ("Phase 7 — 20-Job End-to-End", "NOT STARTED"),
 ]
@@ -83,8 +83,8 @@ BROWSER_STATUS = [
     ("Live Dice answer filling", "NOT BUILT"),
     ("Auto-answering", "NOT BUILT"),
     ("Submit control", "IMPLEMENTED"),
-    ("Submission verification", "LIVE VERIFIED — 1 attempt, correctly classified SUBMIT_FAILED"),
-    ("Live submission success (SUBMITTED)", "NOT YET LIVE VERIFIED"),
+    ("Submission verification", "LIVE VERIFIED — both SUBMIT_FAILED and VERIFIED_SUBMITTED proven against real Dice evidence"),
+    ("Live submission success (SUBMITTED)", "LIVE VERIFIED — job 05fde651... genuinely submitted"),
 ]
 
 
