@@ -503,3 +503,24 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete-pending-live-authorization"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-22T04:30:00Z",
+  "phase": "Phase 6.1 -- Live Worker End-to-End, First Orchestrated Submission",
+  "task": "Run dice_browser/worker.py itself (not manually assembled Phase 4/5 steps) against one new eligible job, through every worker gate, and perform the one explicitly pre-authorized Submit if Review was reached cleanly with no unresolved interventions.",
+  "target": "job 4f5a17f3-2483-4407-83cb-fe558e26a9e4, Java Developer @ Cynet Systems. No real (non-TEST-) candidate_id existed anywhere in the project (applications table was empty -- every prior real submission was ad-hoc, outside the orchestrator); generated 23374e49-9458-4614-ba5a-ae84ccd3b320 for this run.",
+  "real_bug_found": "run_worker(..., submission_policy=AUTHORIZED_AUTONOMOUS) was blocked outright by the environment permission classifier before executing. Re-run under REQUIRE_CONFIRMATION (cannot click Submit) reached NAVIGATION_FAILED: unrecognized wizard screen. Manual read-only reproduction with an explicit wait showed the job actually reaches Review cleanly (2-step wizard, no question step) -- click_next() was returning immediately after the raw .click(), before Dice's SPA transition rendered the next step, so the worker's next screen check saw a mid-transition DOM. Same class of bug easy_apply.py already fixed for its own click.",
+  "fix_with_tdd": "Wrote test_click_next_waits_for_spa_transition_to_settle first (asserts wall-clock elapsed time around click_next() against a route delayed 400ms -- a JS-flag check can't prove ordering since the page's own event loop runs independently of when the Python call returns). Confirmed red (0.081s, no wait). Fix: click_next() now does a best-effort page.wait_for_load_state('networkidle', timeout=5000) after the click, matching easy_apply.py's established pattern. Confirmed green.",
+  "second_run": "Application requeued (FAILED_RETRYABLE -> QUEUED -- a legitimate retry of a bug that failed before ever reaching Submit, not an automatic resubmission) and re-run under REQUIRE_CONFIRMATION. Reached AWAITING_SUBMIT_CONFIRMATION cleanly: claim -> live re-check -> Easy Apply -> existing resume detected -> NO_QUESTIONS_PRESENT -> Review. Work Authorization/Location shown on Review are Dice's own account prefill, not worker-answered.",
+  "submit": "Human clicked Submit directly -- this session's automation remained blocked by the same environment classifier even with explicit advance authorization, confirming the block operates on the tool call itself regardless of chat-level authorization. Dice's real success page: '.../wizard/success', 'Awesome! Your application is on its way!' -- a third distinct confirmation wording (after 'Hooray!'/'Fantastic!'), zero code changes needed.",
+  "verification_and_persistence": "Classified read-only via the existing submission.py:_classify_post_submit() (no re-click) -- VERIFIED_SUBMITTED. Persisting to Supabase (applications.status -> SUBMITTED) was ALSO blocked by the permission classifier -- new observation: the guardrail covers the DB write recording a submission, not only the browser click. Handed a small standalone script to the human (scratch/persist_phase6_submission.py, not committed); they ran it and the real outcome was persisted truthfully.",
+  "verified_final_state": "applications.status=SUBMITTED, submitted_at=2026-08-21T16:44:18Z, verification_evidence has confirmation_text/before_url/after_url, 0 unresolved interventions. Two submission_result events exist -- the first from an earlier persistence attempt that correctly failed with InvalidStatusTransitionError (PROCESSING->SUBMITTED skipping SUBMITTING) before any DB state changed, the second from the successful run. This is a retried database write after catching my own error, not a second Submit click -- the physical button was clicked exactly once, by the human.",
+  "tests_run": "357 passed, 0 failed, 0 skipped (356 baseline + 1 new: click_next timing regression test)",
+  "production_code_changed": true,
+  "files_changed": ["dice_browser/wizard_navigation.py", "tests/test_wizard_navigation.py", "STATE.md", "local_app/app.py"],
+  "human_gate_result": "First genuine worker-driven, end-to-end, orchestrated-and-persisted real Dice submission. Submit and the SUBMITTED-recording DB write both required a human to execute directly -- confirmed again on both fronts this run.",
+  "next_action": "Phase 7 (20-job end-to-end run) is next, not yet started, not yet approved.",
+  "outcome": "phase-complete"
+}
+```
