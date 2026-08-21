@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 3C — C2C correctness hardening, COMPLETE, committed and pushed)
+Last run: 2026-08-21 (Phase 3D — LIKELY policy decision, COMPLETE, documentation-only, committed and pushed)
 
 ## V1 Delivery Board
 
@@ -11,7 +11,7 @@ Last run: 2026-08-21 (Phase 3C — C2C correctness hardening, COMPLETE, committe
 | Phase 3A — Safe JobSpy Integration | COMPLETE |
 | Phase 3B — Qualification Validation | COMPLETE — identified correctness blockers |
 | Phase 3C — C2C Correctness | COMPLETE |
-| Phase 3D — LIKELY Policy | NOT STARTED (executive review packet prepared, awaiting approval) |
+| Phase 3D — LIKELY Policy | COMPLETE — LIKELY → HUMAN_REVIEW approved |
 | Phase 4A — Playwright Reference Audit | NOT STARTED |
 | Phase 4B — Persistent Dice Browser | NOT STARTED |
 | Phase 4C — Easy Apply Navigation + Resume | NOT STARTED |
@@ -31,11 +31,25 @@ Last run: 2026-08-21 (Phase 3C — C2C correctness hardening, COMPLETE, committe
 
 ## Current Phase
 
-Phase 3C — COMPLETE (C2C correctness hardening — both proven Phase 3B bugs fixed, tested, committed, pushed)
+Phase 3D — COMPLETE (LIKELY policy decision recorded, documentation-only)
 
 ## Next Phase
 
-Phase 3D (LIKELY policy decision) — executive review packet prepared, **not executed**. Playwright / application execution / candidate-API integration remain explicitly **not started**. Any next phase needs separate approval.
+Phase 4A (read-only reference-repo audit for the future Playwright worker) — approved to begin. Playwright / application execution / candidate-API integration remain explicitly **not started**.
+
+## V1 Qualification Policy — LOCKED (Phase 3D, 2026-08-21)
+
+Approved decision: **LIKELY → HUMAN_REVIEW.**
+
+Evidence: Phase 3B found 35/39 (89.7%, post-Phase-3C-fix) of CURRENT-qualified jobs depend on LIKELY, yet 0/15 manually reviewed LIKELY jobs had explicit description-level C2C confirmation — LIKELY is Dice's own "Third Party" structural categorization only, never a confirmed positive. AUTO was rejected: right after a phase that proved even CONFIRMED (explicit positive evidence) wasn't infallible, stacking unattended trust on a strictly weaker signal was the wrong sequencing. EXCLUDE was rejected: it discards a legitimate structural signal and leaves too few candidates (4 STRICT-qualified) to meaningfully pursue "up to 20 applications."
+
+Policy meaning, for whenever application execution exists (not yet built):
+- **CONFIRMED + Easy Apply** → eligible for automatic application
+- **LIKELY + Easy Apply** → requires explicit human approval before application (not auto-applied, not silently discarded)
+- **NOT_C2C** → excluded
+- **UNKNOWN** → excluded from automatic application; may be reviewed separately if ever needed
+
+This is a recorded product decision, not a new application-level state. It does **not** reuse or reinterpret `NEEDS_INPUT` — that's an `applications`-table status for an in-flight application hitting an unanswerable question (see `supabase/migrations/20260820175616_dicepilot_foundation.sql`, `LOOP.md`), a different state machine than discovery-time qualification. No code exists yet that acts on CONFIRMED vs. LIKELY differently (no application worker), so `dice/qualification.py`'s `is_qualified` boolean is intentionally unchanged — it still correctly means "discovery-time funnel+evidence+Easy-Apply eligible," not "eligible for unattended application." Adding a CONFIRMED/LIKELY branch there now would encode a policy with no consumer yet. When Phase 4E (Candidate Adapter) / Phase 6 (Sequential Worker) are built, this table is what they must implement — that is the "minimal policy/documentation change" scope for Phase 3D.
 
 ## Phase 3B — Qualification Reliability Study (2026-08-21)
 

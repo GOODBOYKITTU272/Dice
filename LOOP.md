@@ -24,6 +24,7 @@ Every Claude Code session working on DicePilot must, in order:
 - No auto-fix, no auto-merge — see `gate.yaml`'s `autoMergeAllowlist` (docs/tests only) and `maxFiles` cap.
 - Every phase ends with an explicit STOP for review; the next phase's scope is only ever what the human just approved, not what seems like a logical next step.
 - Sensitive/legal/immigration/demographic/attestation answers are never guessed by any Dice worker code, present or future — unknown or ambiguous questions become `NEEDS_INPUT`, full stop.
+- **LIKELY-classified C2C jobs require explicit human approval before any application is submitted** (Phase 3D, 2026-08-21) — never auto-applied, never silently discarded. Only CONFIRMED + Easy Apply jobs are eligible for automatic application. See `STATE.md`'s "V1 Qualification Policy" for the full evidence and reasoning.
 - An application is never marked `SUBMITTED` on the strength of a click — only after a positively verified Dice success state.
 
 ## Worktree Isolation

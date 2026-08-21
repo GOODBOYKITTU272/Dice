@@ -196,3 +196,16 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T17:00:00Z",
+  "phase": "Phase 3D — LIKELY Policy Decision",
+  "task": "Record approved V1 qualification policy: LIKELY -> HUMAN_REVIEW (never AUTO, never EXCLUDE). Documentation-only — dice/qualification.py's is_qualified boolean intentionally unchanged, since no application-execution code exists yet to act on CONFIRMED vs LIKELY differently.",
+  "files_changed": ["STATE.md", "LOOP.md"],
+  "production_code_changed": false,
+  "tests_run": "99 passed, 0 failed, 0 skipped (unchanged — no code touched)",
+  "human_gate_result": "policy approved and recorded verbatim as given",
+  "outcome": "phase-complete"
+}
+```
