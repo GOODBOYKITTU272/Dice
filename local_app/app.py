@@ -135,13 +135,13 @@ def jobs_review():
 def jobs_apply():
     """Queues the selected, still-eligible jobs (enqueue_application() only
     -- the same call every other queued application in this project goes
-    through) into a new bounded run_registry run, then launches the
-    existing Phase 6 worker as a detached subprocess scoped to exactly
-    that run. This route itself never touches Dice and never processes a
-    job -- it only writes QUEUED rows and starts a worker process; the
-    worker (run_worker_for_run) is what does the actual, still-sequential
-    processing, one job at a time, using every existing safety gate
-    unchanged."""
+    through) into a new PENDING run_registry run and redirects to its
+    progress page. NEVER launches a worker process -- this route (which
+    also serves the Vercel deployment) has no path to the dedicated,
+    authenticated Dice Chrome running on the operator's Mac, and no way
+    to keep a background process alive past the request. The standalone
+    worker_daemon module, started manually on that Mac, is the only
+    thing that ever claims and processes a PENDING run."""
     candidate_id = _authorized_candidate_id()
     if not candidate_id:
         return render_template(
@@ -170,23 +170,6 @@ def jobs_apply():
         return redirect(url_for("applications", no_eligible_jobs=1))
 
     run = run_registry.create_run(queued_application_ids, candidate_id=candidate_id)
-
-    try:
-        subprocess.Popen(
-            [sys.executable, "-m", "dice_browser.worker", "--run-id", run["id"], "--resume-path", _RESUME_PATH],
-            cwd=str(Path(__file__).resolve().parent.parent),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except OSError as exc:
-        # The run and its queued applications already exist in Supabase --
-        # only the worker process itself failed to start (e.g. this Flask
-        # process can't spawn a subprocess here, such as on a serverless
-        # deployment). Land on Run Progress anyway with a specific error
-        # rather than a generic 500 or a misleading "it's running" redirect.
-        return redirect(url_for("run_progress_view", run_id=run["id"], launch_error=str(exc)))
-
     return redirect(url_for("run_progress_view", run_id=run["id"]))
 
 
@@ -199,23 +182,19 @@ def run_progress_view(run_id):
 
     client, error = _client_or_none()
     progress = queries.run_progress(client, run) if client else None
-    return render_template(
-        "run_progress.html",
-        active="jobs",
-        run_id=run_id,
-        progress=progress,
-        error=error,
-        launch_error=request.args.get("launch_error"),
-    )
+    return render_template("run_progress.html", active="jobs", run_id=run_id, progress=progress, error=error)
 
 
 @app.route("/runs/<run_id>/stop", methods=["POST"])
 def run_stop_view(run_id):
-    """Sets the run's status to STOPPED -- checked by run_worker_for_run
-    before it claims its NEXT application, never mid-flight. Cannot and
-    does not interrupt a Submit/verification already in progress."""
+    """Sets stop_requested -- checked by run_worker_for_run before it
+    claims its NEXT application, never mid-flight. Cannot and does not
+    interrupt a Submit/verification already in progress. Deliberately
+    does not write status itself: the worker daemon is the only writer
+    of status -> STOPPED, so this can never race with the daemon's own
+    status update on a run it's actively processing."""
     try:
-        run_registry.update_run_status(run_id, "STOPPED")
+        run_registry.request_stop(run_id)
     except run_registry.RunNotFoundError:
         pass
     return redirect(url_for("run_progress_view", run_id=run_id))

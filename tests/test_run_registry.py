@@ -40,7 +40,7 @@ def test_create_run_persists_and_stamps_application_ids():
     job_b, app_b = _make_queued_application()
     try:
         run = run_registry.create_run([app_a["id"], app_b["id"]], candidate_id=CANDIDATE)
-        assert run["status"] == "QUEUED"
+        assert run["status"] == "PENDING"
         assert set(run["application_ids"]) == {app_a["id"], app_b["id"]}
 
         sc = get_supabase_client()
@@ -79,10 +79,12 @@ def test_is_stopped_false_for_running_run():
 
 
 def test_is_stopped_true_after_stop():
+    # is_stopped() checks stop_requested, not status -- status == 'STOPPED'
+    # is written only by the worker daemon itself, once it actually stops.
     job, app = _make_queued_application()
     run = run_registry.create_run([app["id"]], candidate_id=CANDIDATE)
     try:
-        run_registry.update_run_status(run["id"], "STOPPED")
+        run_registry.request_stop(run["id"])
         assert run_registry.is_stopped(run["id"]) is True
     finally:
         _cleanup(job["id"], run_ids=[run["id"]])

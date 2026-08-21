@@ -166,7 +166,7 @@ def test_run_worker_for_run_stop_prevents_next_job(live_client, page, monkeypatc
 
         def stop_after_first(*a, **k):
             result = real_process(*a, **k)
-            run_registry.update_run_status(run["id"], "STOPPED")
+            run_registry.request_stop(run["id"])
             return result
 
         monkeypatch.setattr(worker, "process_one_application", stop_after_first)

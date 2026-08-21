@@ -2,16 +2,13 @@
 Apply). Real Supabase, disposable TEST- rows cleaned up per test, same
 convention as tests/test_local_app.py.
 
-Phase 6.2: /jobs/apply now launches the real worker as a subprocess (see
-tests/test_jobs_apply_to_worker.py for that behavior's own coverage) --
-subprocess.Popen is mocked and run_registry.RUNS_DIR is isolated for
-every test in this file so none of them can ever spawn a real worker
-process or write a real run file, regardless of which test happens to
-POST to /jobs/apply. (A real subprocess briefly ran during this file's
-own development, before this fixture existed -- against a disposable
-TEST- job that was already cleaned up before it could do anything, but a
-real page load against the live authenticated Dice session still
-happened. This fixture is the fix.)
+Phase 6.3: /jobs/apply only ever writes a PENDING run to Supabase and
+redirects -- it never launches a worker process of any kind (see
+tests/test_worker_daemon_architecture.py and
+tests/test_jobs_apply_to_worker.py for that behavior's own coverage).
+subprocess.Popen is still defensively monkeypatched to a no-op for every
+test in this file (belt-and-suspenders against a regression reintroducing
+a launch call), even though nothing here is expected to call it anymore.
 """
 from __future__ import annotations
 
@@ -31,9 +28,6 @@ APP_SOURCE = (Path(__file__).parent.parent / "local_app" / "app.py").read_text(e
 
 @pytest.fixture(autouse=True)
 def _no_real_worker_subprocess(monkeypatch):
-    # run_registry is Supabase-backed (migration 20260822010000) -- no
-    # local state to isolate. What must still never happen from this
-    # file's tests is a real worker process actually starting.
     monkeypatch.setattr(app_module.subprocess, "Popen", lambda *a, **k: None)
     monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", "44444444-4444-4444-4444-444444444444")
 
@@ -309,33 +303,26 @@ def test_jobs_routes_never_import_browser_or_worker_execution_code():
     # Scoped to the Jobs selection flow's own route bodies -- NOT the whole
     # file, which legitimately references playwright/the worker CLI
     # elsewhere (browser_check.py's checks, "Resume Application"'s
-    # subprocess launch). jobs() and jobs_review() stay fully DB-only.
-    # jobs_apply() (Phase 6.2) legitimately references "dice_browser.worker"
-    # as a subprocess argv string (see test_jobs_apply_route_launches_worker_
-    # as_a_detached_subprocess_not_in_process below) -- what's still
-    # forbidden for it is importing/driving Playwright, or calling the
-    # worker's own functions in-process instead of via subprocess.
-    forbidden = ("playwright", "sync_playwright")
+    # subprocess launch). jobs(), jobs_review(), and (as of Phase 6.3)
+    # jobs_apply() all stay fully DB-only.
+    forbidden = ("playwright", "sync_playwright", "subprocess", "popen")
     for route_fn in ("jobs()", "jobs_review()", "jobs_apply()"):
         body = _route_body(route_fn.rstrip("()")).lower()
         for term in forbidden:
             assert term.lower() not in body, f"{route_fn} must never reference {term!r} -- Jobs selection must stay DB-only"
 
-    for route_fn in ("jobs()", "jobs_review()"):
+    for route_fn in ("jobs()", "jobs_review()", "jobs_apply()"):
         body = _route_body(route_fn.rstrip("()")).lower()
         for term in ("dice_browser.worker", "dice_browser.submission", "run_worker", "process_one_application"):
             assert term not in body, f"{route_fn} must never reference {term!r} -- Jobs selection must stay DB-only"
 
 
-def test_jobs_apply_route_launches_worker_as_a_detached_subprocess_not_in_process():
-    # Phase 6.2: Apply to Selected Jobs now starts the worker -- but only
-    # ever as a subprocess (matching "Resume Application"'s established
-    # pattern), never by calling run_worker_for_run()/process_one_application()
-    # directly, and never by looping Popen once per job (exactly one
-    # process for the whole bounded run, scoped by --run-id).
+def test_jobs_apply_route_only_enqueues_and_creates_a_pending_run():
+    # Phase 6.3: Apply to Selected Jobs never launches a worker process of
+    # any kind -- it only enqueues applications and writes a PENDING run
+    # (see tests/test_worker_daemon_architecture.py for the standalone
+    # daemon that actually claims and processes it).
     body = _route_body("jobs_apply")
     assert "enqueue_application" in body
-    assert body.lower().count(".popen(") == 1
-    assert "--run-id" in body
-    assert "run_worker_for_run(" not in body
-    assert "process_one_application(" not in body
+    assert "create_run" in body
+    assert ".popen(" not in body.lower()

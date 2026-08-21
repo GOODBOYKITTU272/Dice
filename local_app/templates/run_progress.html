@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Run Progress{% endblock %}
 {% block content %}
-{% if progress and progress.run.status in ('QUEUED', 'RUNNING') %}
+{% if progress and progress.run.status in ('PENDING', 'RUNNING') %}
 <meta http-equiv="refresh" content="5">
 {% endif %}
 
@@ -10,12 +10,16 @@
 {% if progress %}
 <p class="subtitle">
   Run Status:
-  <span class="badge {{ 'blue' if progress.run.status in ('QUEUED','RUNNING') else ('green' if progress.run.status == 'COMPLETE' else '') }}">{{ progress.run.status }}</span>
+  <span class="badge {{ 'blue' if progress.run.status in ('PENDING','RUNNING') else ('green' if progress.run.status == 'COMPLETE' else '') }}">{{ progress.run.status }}</span>
+  &nbsp;&middot;&nbsp;
+  Worker:
+  <span class="badge {{ 'green' if progress.worker.online else 'red' }}">{{ 'ONLINE' if progress.worker.online else 'OFFLINE' }}</span>
+  {% if progress.worker.last_heartbeat_at %}
+  <span class="muted">(last heartbeat {{ progress.worker.age_seconds|round|int }}s ago)</span>
+  {% else %}
+  <span class="muted">(no heartbeat received yet)</span>
+  {% endif %}
 </p>
-{% endif %}
-
-{% if launch_error %}
-<div class="error">The worker could not be started: {{ launch_error }}. The jobs are still queued for this run — you can retry via the CLI: <code>.venv/bin/python -m dice_browser.worker --run-id {{ run_id }}</code></div>
 {% endif %}
 
 {% if error %}<div class="error">{{ error }}</div>
@@ -23,6 +27,13 @@
 {% else %}
 
 <p class="muted" style="margin-bottom:1rem;">DicePilot automates the application up to the final Submit step. Applications ready for submission will appear here.</p>
+
+{% if progress.run.status in ('PENDING', 'RUNNING') and not progress.worker.online %}
+<div class="card" style="border-left: 4px solid var(--accent);">
+  <h2>Waiting for DicePilot worker</h2>
+  <p class="muted">This run is written and waiting — no worker is currently online to process it. Start the worker on the Mac with the authenticated Dice Chrome: <code>.venv/bin/python -m dice_browser.worker_daemon</code></p>
+</div>
+{% endif %}
 
 <div class="grid grid-5">
   <div class="card stat"><div class="num">{{ progress.counts.selected }}</div><div class="label">Selected</div></div>
@@ -37,6 +48,8 @@
   {% if progress.current %}
   <p><strong>{{ progress.current.job.title or 'Unknown' }}</strong> — {{ progress.current.job.company_name or '—' }}</p>
   <p class="muted">Current Step: {{ progress.current.current_step_label }}</p>
+  {% elif not progress.worker.online %}
+  <p class="muted">Waiting for DicePilot worker.</p>
   {% else %}
   <p class="muted">No job actively running right now.</p>
   {% endif %}
@@ -79,7 +92,7 @@
 </div>
 
 <div class="card">
-  {% if progress.run.status in ('QUEUED', 'RUNNING') %}
+  {% if progress.run.status in ('PENDING', 'RUNNING') %}
   <form method="post" action="{{ url_for('run_stop_view', run_id=run_id) }}">
     <button class="btn secondary" type="submit">Stop Run</button>
   </form>

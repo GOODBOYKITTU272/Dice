@@ -479,6 +479,7 @@ def run_progress(client, run: dict[str, Any]) -> dict[str, Any]:
         "run": run,
         "rows": rows,
         "current": running[0] if running else None,
+        "worker": run_registry.worker_status(),
         "counts": {
             "selected": len(rows),
             "processed": submitted + needs_input + awaiting_confirmation + failed,
