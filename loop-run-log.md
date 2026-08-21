@@ -94,3 +94,52 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T11:00:00Z",
+  "phase": "Phase 2",
+  "task": "Local-first visual Dice discovery: dice/search.py, job_parser.py, c2c_classifier.py, easy_apply_detector.py, discovery.py, models.py; local_app/ operator UI (new, not reused from Indeed). HTTP-only discovery (no Playwright) after confirming Dice's job-search JSON API needs an internal key (403) but the public search/detail pages are server-rendered HTML with a stable DOM + schema.org JSON-LD.",
+  "files_changed": 16,
+  "tests_run": "47 passed, 0 skipped, 0 failed (25 original Phase 1 + 22 new Phase 2: C2C classifier, Easy Apply detector, search/detail parsing incl. duplicate-guid dedup)",
+  "bug_found_and_fixed": "Easy Apply detail-page cross-check was reading an unrelated 'similar jobs' widget's badge, producing false positives on every job. Removed; now search-card-badge-only.",
+  "self_verification": "Ran the local UI myself (role=Software Engineer, max_results=5) before handing back: 5 real Dice jobs discovered, classified, saved to dice_jobs; terminal log, UI table, and Supabase rows all cross-checked and matched.",
+  "schema_change": "none needed — fit entirely within the Phase 1 dice_jobs table",
+  "human_gate_result": "implementation + self-verification complete; NOT marked Phase 2 complete — reserved for the human's own visual review per explicit instruction",
+  "outcome": "escalated"
+}
+```
+
+```json
+{
+  "run_id": "2026-08-21T12:00:00Z",
+  "phase": "Phase 2 — Visual Review Correction Iteration",
+  "task": "Fix Contract/Third Party counter (root cause: UI only counted is_third_party, never Contract, despite the label). Add DISCOVERED/STORED/QUALIFIED distinction via new dice/qualification.py (deterministic, no LLM, no DB migration). Add QUALIFIED column + reason to UI. Explicitly declined DeepSeek Harness (human decision, recorded, no dependency added).",
+  "files_changed": 4,
+  "files_new": ["dice/qualification.py", "tests/test_qualification.py"],
+  "files_modified": ["dice/discovery.py", "local_app/templates/index.html"],
+  "tests_run": "65 passed, 0 skipped, 0 failed (47 baseline unchanged + 18 new test_qualification.py)",
+  "self_verification": "Computed corrected counters against the 5 real stored rows from the human's first visual test (not re-run through the UI) — exact match to the human-specified expected table: Discovered=5 Contract=5 ThirdParty=0 Confirmed=0 Likely=0 Unknown=4 NotC2C=1 EasyApply=4 Stored=5 Qualified=0, including per-row reasons.",
+  "easy_apply_change": "none — production search-card-only logic preserved unchanged, per explicit instruction; the earlier 'false' observation was confirmed to be from unreliable pre-code scratch exploration, not the production parser",
+  "c2c_negative_override_change": "none — preserved unchanged, re-confirmed by existing + new tests",
+  "database_migration": "none — qualification derived entirely from existing employment_type/is_third_party/c2c_status/is_easy_apply columns",
+  "human_gate_result": "corrected UI ready; NOT marked Phase 2 complete — reserved for the human's second visual review",
+  "outcome": "escalated"
+}
+```
+
+```json
+{
+  "run_id": "2026-08-21T13:00:00Z",
+  "phase": "Phase 2 durability check",
+  "task": "Lock two-repo architecture decision in docs. Full git status/diff review. Secret scan. Line-by-line re-review of dice/discovery.py, search.py, job_parser.py, c2c_classifier.py, easy_apply_detector.py, qualification.py against the required-behaviors checklist. Fresh (not cached) full test run + cleanup. Import/runtime check for every Phase 2 module and local_app. Commit and push.",
+  "architecture_decision": "TWO-REPO, locked: Indeed-Scraper (production Indeed, untouched) + Dice (standalone DicePilot, this repo). Supersedes the TRD's original single-repo language by explicit human decision.",
+  "secret_scan": "clean — .env confirmed gitignored and absent from git status; no secret-shaped strings in any file staged for commit",
+  "code_review_result": "all required behaviors confirmed true: Contract/Third Party is funnel-only (dice/qualification.py never infers C2C from it); 4-state C2C model with evidence preserved; negative evidence overrides positive (dice/c2c_classifier.py); Easy Apply requires a positive search-card signal, never inferred from URL absence (dice/easy_apply_detector.py); no application-initiation URLs called anywhere in discovery; no apply-submission logic; no candidate data referenced or guessed",
+  "minor_finding_not_blocking": "dice/easy_apply_detector.py module docstring is stale (still describes a two-signal cross-check design that no longer exists in production use) — functionally correct, comment needs a follow-up fix, not treated as blocking",
+  "tests_run": "65 passed, 0 failed, 0 skipped (fresh run, not the cached historical number) — test rows cleaned up immediately after, 5 real discovery rows from prior human visual tests left untouched",
+  "runtime_check": "all 7 Phase 2 modules import cleanly; local_app.app constructs and registers 3 routes without error",
+  "human_gate_result": "verification clean; committed and pushed",
+  "outcome": "phase-complete"
+}
+```

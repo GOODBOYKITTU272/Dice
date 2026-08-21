@@ -6,3 +6,10 @@ python-dotenv
 
 # ── Testing ─────────────────────────────────────────────────────────────────────
 pytest
+
+# ── Dice discovery: HTTP + HTML parsing (Phase 2, no browser needed) ──────────
+requests
+beautifulsoup4
+
+# ── Local operator UI (Phase 2) ────────────────────────────────────────────────
+flask
