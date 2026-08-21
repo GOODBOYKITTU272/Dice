@@ -68,3 +68,44 @@ class ResumeUploadResult:
     uploaded: bool
     existing_resume_detected: bool | None
     reason: str
+
+
+class QuestionExtractionStatus(str, Enum):
+    """Result of dice_browser.questions.extract_questions(). NO_QUESTIONS_PRESENT
+    is the one real live-verified branch so far (Data Engineer @ Stefanini,
+    2026-08-21): a Review screen with zero supported question controls.
+    QUESTIONS_PRESENT means candidate controls were found but not yet
+    classified -- no live evidence of real question shapes exists yet, so
+    this phase deliberately stops at "something is here" rather than
+    guessing what it is. UNKNOWN_SCREEN means the page isn't a recognized
+    Review screen at all -- never treated as "no questions" by omission."""
+
+    NO_QUESTIONS_PRESENT = "NO_QUESTIONS_PRESENT"
+    QUESTIONS_PRESENT = "QUESTIONS_PRESENT"
+    UNKNOWN_SCREEN = "UNKNOWN_SCREEN"
+
+
+class FieldType(str, Enum):
+    """Deliberately minimal -- TEXT/RADIO/SELECT/etc. are not added until
+    a real live question of that shape has actually been observed. Every
+    candidate control found so far is UNSUPPORTED by construction."""
+
+    UNSUPPORTED = "UNSUPPORTED"
+
+
+@dataclass(frozen=True)
+class QuestionField:
+    """One candidate question control found on a Review/question screen.
+    No live-verified question exists yet, so this intentionally carries
+    only structural facts (id, type, visibility) -- no prompt-extraction
+    or answer-classification logic exists until a real question shape is
+    observed to build it against."""
+
+    question_id: str
+    field_type: FieldType
+
+
+@dataclass(frozen=True)
+class QuestionExtractionResult:
+    status: QuestionExtractionStatus
+    questions: tuple[QuestionField, ...]

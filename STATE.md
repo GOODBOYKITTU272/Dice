@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 4C.1 corrected resume replacement — live-verified end to end. Authentication: VERIFIED — HUMAN + CDP. Easy Apply: VERIFIED. Resume Detection: VERIFIED. Resume Replacement: VERIFIED. Resume Upload: VERIFIED. Questions: NOT BUILT. Submission: NOT BUILT. Phase 4C: COMPLETE.)
+Last run: 2026-08-21 (Phase 4D-A — Review-screen/NO_QUESTIONS_PRESENT detection, live-verified on the same qualified job. Phase 4D: IN PROGRESS. Live branch verified: NO_QUESTIONS_PRESENT / DIRECT-TO-REVIEW. Custom question extraction: NOT YET LIVE VERIFIED. Auto-answering: NOT BUILT. Submission: NOT BUILT.)
 
 ## V1 Delivery Board
 
@@ -16,7 +16,7 @@ Last run: 2026-08-21 (Phase 4C.1 corrected resume replacement — live-verified 
 | Phase 4B — Persistent Dice Browser | COMPLETE |
 | Phase 4B.1 — Authenticated Session Bootstrap | COMPLETE — human login + CDP-attach, session persists while Chrome stays running |
 | Phase 4C — Easy Apply Navigation + Resume | COMPLETE — Easy Apply + resume replacement both live-verified end to end |
-| Phase 4D — Application Question Engine | NOT STARTED |
+| Phase 4D — Application Question Engine | IN PROGRESS — Review-screen/NO_QUESTIONS_PRESENT detection live-verified; custom question extraction not yet observed live |
 | Phase 4E — Candidate Adapter | NOT STARTED |
 | Phase 4F — NEEDS_INPUT / Pause-Resume | NOT STARTED |
 | Phase 5 — Submission Verification | NOT STARTED |
@@ -32,11 +32,25 @@ Last run: 2026-08-21 (Phase 4C.1 corrected resume replacement — live-verified 
 
 ## Current Phase
 
-Phase 4C — COMPLETE. Easy Apply wizard and resume replacement both live-verified end-to-end on one real qualified job, using one internal test resume file. No question-answering, Next/Continue/Review, or Submit code exists anywhere in this repo — Phase 4C stops immediately after resume success, by construction, not by a runtime check that could be bypassed.
+Phase 4D-A — IN PROGRESS. Review-screen / NO_QUESTIONS_PRESENT detection built with TDD and live-verified on the same qualified job used throughout Phase 4C. No question-answering, filling, selecting, or Next/Continue/Back/Submit code exists anywhere in `dice_browser/questions.py` — locked in structurally by a boundary test, not just by omission.
 
 ## Next Phase
 
-Not yet approved. Question answering (Phase 4D), submission verification (Phase 5), candidate-API integration (Phase 4E) remain explicitly **not started**.
+Not yet approved. Need a different Easy Apply job that actually presents custom screening-question controls before the field-type model, answer policy, and candidate mapping from the earlier Phase 4D plan can be built against real evidence rather than assumption. Auto-answering (rest of Phase 4D), submission verification (Phase 5), candidate-API integration (Phase 4E) remain explicitly **not started**.
+
+## Phase 4D-A — Review-Screen / NO_QUESTIONS_PRESENT Detection (2026-08-21)
+
+**Real live finding locked in**: job `469efdf8-e321-46a1-9346-70870d020736` (Data Engineer, Stefanini) has **no custom employer screening questions**. Its Step 2 of 2 is a read-only "Review your application" screen (Resume, Cover Letter, Work Authorization, Current Location, Dice Job Match Score™, Profile Visibility summaries, Back/Submit buttons) with exactly one control on the whole page — an unlabeled, hidden checkbox unrelated to any question. Confirmed directly: neither "Work Authorization" nor "Current Location" has an edit button, link, or input/select/textarea in its container — both are pulled from the candidate's existing Dice profile and shown for confirmation, not asked fresh per application.
+
+**`dice_browser/questions.py`** (new): `is_review_screen(page)` requires all three live-verified signals together ("Step 2 of 2", "Review your application" heading, a Submit button) — no single signal trusted alone. `extract_questions(page)` returns `NO_QUESTIONS_PRESENT` only when the page is a recognized review screen AND zero *visible* candidate controls exist (hidden controls, like the real page's stray checkbox, are filtered out before counting); returns `QUESTIONS_PRESENT` (with minimal, unclassified `QuestionField` entries — no prompt/answer classification logic exists yet, since no real question shape has been observed live) when any visible control is found, even one this module can't yet classify; returns `UNKNOWN_SCREEN` for anything that isn't a recognized review screen, rather than ever defaulting to "no questions" by omission. Zero `.click()`/`set_input_files`/`.fill()`/`.select_option()`/`.check()` calls anywhere in the module — locked in by a boundary test, mirroring Phase 4C's `easy_apply.py`/`resume.py` guards.
+
+**Deliberately not built yet, per explicit instruction**: prompt extraction, field-type classification (TEXT/RADIO/SELECT/etc.), answer resolution, candidate-field mapping, sensitive-field policy. All of that needs a real live question screen to build against — this job doesn't have one.
+
+**Live validation**: `is_review_screen()` → `True`; `extract_questions()` → `NO_QUESTIONS_PRESENT`, 0 questions, against the real live Step 2 page. No click issued during validation; page state unchanged before/after.
+
+**Tests**: 181 baseline → **192 passed, 0 failed, 0 skipped** (11 new in `test_dice_browser_questions.py`; `test_dice_browser_phase4c_boundary.py`'s `test_no_question_answering_module_exists` replaced with `test_questions_module_is_detection_only`, since a question-detection module now legitimately exists).
+
+Decision gate: **PHASE 4D-A PASS. PHASE 4D OVERALL: IN PROGRESS** (blocked on finding a job with real screening questions before the rest of the engine can be built against live evidence).
 
 ## Phase 4C.1 — Corrected Resume Replacement (2026-08-21)
 

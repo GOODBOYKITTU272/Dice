@@ -40,7 +40,7 @@ DELIVERY_BOARD = [
     ("Phase 4B — Persistent Dice Browser", "COMPLETE"),
     ("Phase 4B.1 — Authenticated Session Bootstrap", "COMPLETE"),
     ("Phase 4C — Easy Apply + Resume", "COMPLETE"),
-    ("Phase 4D — Question Engine", "NOT STARTED"),
+    ("Phase 4D — Question Engine", "IN PROGRESS — NO_QUESTIONS_PRESENT detection verified; custom questions not yet live-verified"),
     ("Phase 4E — Candidate Adapter", "NOT STARTED"),
     ("Phase 4F — NEEDS_INPUT", "NOT STARTED"),
     ("Phase 5 — Submission Verification", "NOT STARTED"),
@@ -57,7 +57,9 @@ BROWSER_STATUS = [
     ("Resume Detection", "VERIFIED"),
     ("Resume Replacement", "VERIFIED"),
     ("Resume Upload", "VERIFIED"),
-    ("Application questions", "NOT BUILT"),
+    ("Review-screen detection (NO_QUESTIONS_PRESENT)", "VERIFIED"),
+    ("Custom question extraction", "NOT YET LIVE VERIFIED"),
+    ("Auto-answering", "NOT BUILT"),
     ("Submission", "NOT BUILT"),
 ]
 

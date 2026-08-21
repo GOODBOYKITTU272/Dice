@@ -321,3 +321,19 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T21:30:00Z",
+  "phase": "Phase 4D-A -- Review-Screen / NO_QUESTIONS_PRESENT Detection",
+  "task": "Lock in a real live finding (job 469efdf8-e321-46a1-9346-70870d020736 has no custom screening questions -- Step 2 of 2 is a read-only Review screen) as a typed, tested code path before searching for a different job with real questions. Built dice_browser/questions.py: is_review_screen() (three live-verified signals required together) and extract_questions() (NO_QUESTIONS_PRESENT / QUESTIONS_PRESENT / UNKNOWN_SCREEN, never guessing 'no questions' on an unrecognized page).",
+  "tdd_note": "Tests written first against the not-yet-existing module (confirmed ImportError, red for the right reason), then the already-drafted implementation was restored and the suite went green -- true red/green order preserved despite drafting the implementation first.",
+  "live_validation": "Read-only against the real, still-open Step 2 page: is_review_screen() -> True, extract_questions() -> NO_QUESTIONS_PRESENT, 0 questions. No click issued; page state unchanged before and after.",
+  "tests_run": "192 passed, 0 failed, 0 skipped (181 baseline + 11 new)",
+  "production_code_changed": true,
+  "files_changed": ["dice_browser/questions.py", "dice_browser/models.py", "tests/test_dice_browser_questions.py", "tests/test_dice_browser_phase4c_boundary.py", "STATE.md", "local_app/app.py"],
+  "human_gate_result": "pending -- final report delivered this session, awaiting review",
+  "next_action": "Find a different Easy Apply job with real custom screening questions before building prompt extraction, field-type classification, answer resolution, or candidate mapping -- none of that has live evidence yet",
+  "outcome": "phase-complete"
+}
+```

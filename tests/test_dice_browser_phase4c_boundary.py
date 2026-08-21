@@ -10,8 +10,17 @@ from pathlib import Path
 DICE_BROWSER_DIR = Path(__file__).parent.parent / "dice_browser"
 
 
-def test_no_question_answering_module_exists():
-    assert not (DICE_BROWSER_DIR / "questions.py").exists()
+def test_questions_module_is_detection_only():
+    # Phase 4D-A: dice_browser/questions.py now exists (Review-screen /
+    # NO_QUESTIONS_PRESENT detection), but it must never click, fill, or
+    # select anything -- detection/extraction only, same discipline as
+    # every other module in this repo.
+    source = (DICE_BROWSER_DIR / "questions.py").read_text(encoding="utf-8")
+    assert ".click()" not in source
+    assert "set_input_files" not in source
+    assert ".fill(" not in source
+    assert ".select_option(" not in source
+    assert ".check()" not in source
 
 
 def test_no_submission_module_exists():
