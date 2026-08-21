@@ -1,7 +1,7 @@
-"""Phase 4C boundary guard: structural proof that no question-answering,
-Next/Review, or Submit code exists anywhere in this repo yet. The "stop"
-after resume upload is structural (no such module exists), not a runtime
-check that could be bypassed -- this test locks that in.
+"""Phase 4C boundary guard, extended through Phase 5: structural proof
+that Next/Continue/Review/answer-question code exists nowhere in this
+repo, and that Submit exists in exactly one place (dice_browser/
+submission.py, Phase 5, itself gated and separately boundary-tested).
 """
 from __future__ import annotations
 
@@ -23,13 +23,31 @@ def test_questions_module_is_detection_only():
     assert ".check()" not in source
 
 
-def test_no_submission_module_exists():
-    assert not (DICE_BROWSER_DIR / "submission.py").exists()
+def test_submission_module_clicks_exactly_one_submit_button():
+    # Phase 5: dice_browser/submission.py now exists and is the ONE
+    # module in this repo permitted to click Submit -- gated behind
+    # explicit preconditions (see test_phase5_boundary.py for the full
+    # structural guard). It must click at most once, never click
+    # Next/Continue/Review, and never answer a question itself.
+    source = (DICE_BROWSER_DIR / "submission.py").read_text(encoding="utf-8")
+    assert source.count(".click()") == 1
+    lowered = source.lower()
+    for forbidden in ("click_next", "click_review", "click_continue", "answer_question"):
+        assert forbidden not in lowered
 
 
-def test_no_next_review_submit_functions_anywhere_in_dice_browser():
+def test_no_next_review_submit_functions_outside_submission_module():
+    # Every OTHER module in dice_browser/ must still never define
+    # Next/Review/Submit/answer-question functions -- only submission.py
+    # (Phase 5, explicitly authorized and itself boundary-tested) may.
+    # models.py is exempt from the name-substring check specifically --
+    # it's data-only (dataclasses/enums, never an action), and its
+    # SubmissionResult/SubmissionStatus docstrings legitimately reference
+    # submit_application() by name for cross-reference documentation.
     forbidden = ("click_next", "click_review", "click_submit", "answer_question", "submit_application")
     for py_file in DICE_BROWSER_DIR.glob("*.py"):
+        if py_file.name in ("submission.py", "models.py"):
+            continue
         source = py_file.read_text(encoding="utf-8").lower()
         for name in forbidden:
             assert name not in source, f"found forbidden function name {name!r} in {py_file}"

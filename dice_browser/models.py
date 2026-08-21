@@ -1,12 +1,13 @@
-"""Phase 4B: browser/session state models.
-
-Foundation states only. No uploading/answering/reviewing/submitting states
-belong here yet — those arrive with the phases that build them.
+"""Browser/session state models, grown phase by phase (4B foundation, 4C
+resume, 4D questions, 5 submission). Auto-answering has still never been
+added anywhere in this codebase -- Phase 4D stops at reading and
+classifying a question, never filling one in.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 
 class BrowserState(str, Enum):
@@ -142,3 +143,37 @@ class QuestionField:
 class QuestionExtractionResult:
     status: QuestionExtractionStatus
     questions: tuple[QuestionField, ...]
+
+
+class SubmissionStatus(str, Enum):
+    """Result of dice_browser.submission.submit_application(). Clicking
+    Submit is never itself evidence -- only VERIFIED_SUBMITTED permits
+    applications.status -> SUBMITTED. Every other value is a reason to
+    stop, not a reason to guess or retry automatically."""
+
+    VERIFIED_SUBMITTED = "VERIFIED_SUBMITTED"
+    NOT_SUBMITTED = "NOT_SUBMITTED"
+    VERIFICATION_UNCERTAIN = "VERIFICATION_UNCERTAIN"
+    AUTH_REQUIRED = "AUTH_REQUIRED"
+    NEEDS_INPUT = "NEEDS_INPUT"
+    SECURITY_CHALLENGE = "SECURITY_CHALLENGE"
+    SUBMIT_FAILED = "SUBMIT_FAILED"
+
+
+@dataclass
+class SubmissionResult:
+    """evidence is bounded, structured, non-sensitive metadata only --
+    never a raw page/body dump, never cookies or tokens. application_id
+    is DicePilot's own applications.id (opaque to this module); dice_job_id
+    is whatever identifier the caller wants attributed to this result --
+    neither is independently validated against Supabase here, since this
+    module has no DB access (see db/submission_repository.py for the
+    DB-side state transition, kept separate on purpose)."""
+
+    status: SubmissionStatus
+    reason: str
+    evidence: dict[str, Any]
+    application_id: str | None
+    dice_job_id: str | None
+    before_url: str
+    after_url: str

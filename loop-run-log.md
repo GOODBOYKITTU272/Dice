@@ -413,3 +413,21 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-22T02:00:00Z",
+  "phase": "Phase 5 -- Submission Verification (implementation + offline validation only, live submit deferred)",
+  "task": "Build a submission-verification layer where clicking Submit is never itself SUBMITTED evidence -- only positive post-submit evidence does. dice_browser/submission.py (the only module permitted to click Submit) and db/submission_repository.py (separate DB-side state transition, SUBMITTED written only after VERIFIED_SUBMITTED).",
+  "part1_audit_finding": "Read-only audit of all 5 already-open Review-screen tabs (Stefanini, QUANTUM, MSYS x2, Yashnee): all show a visible, enabled Submit button, no already-applied signal detectable pre-submit, .ribbon-status-applied never seen (confirmed still unverified, per the task's own known-risk note). Required stale-job re-check surfaced a real safety concern: fresh page loads to 3 different jobs' detail pages (TalentFish, QUANTUM, Yashnee) all returned AUTH_REQUIRED consistently (including after an explicit wait), while the 5 already-open wizard tabs still read ACTIVE from their own unrefreshed in-page state. Since a real Submit click is a same-origin request carrying the same cookies a fresh navigation would, this is a real risk a live Submit could hit AUTH_REQUIRED rather than complete -- not a code defect (the module's own auth checks are designed to catch and report exactly this), but a live-environment condition worth resolving first.",
+  "verification_design": "VERIFIED_SUBMITTED requires BOTH a scoped confirmation signal (h1/h2/h3/role=status/role=alert text matching a fixed phrase list -- never a page-wide substring search) AND the URL leaving /wizard. Either alone is VERIFICATION_UNCERTAIN. .ribbon-status-applied deliberately NOT used as a signal -- never live-verified, per the task's explicit known-risk instruction. No live confirmation-page evidence exists yet anywhere -- every signal is a best-effort design against this codebase's established UI conventions, documented as such in the module's own docstring.",
+  "db_side": "record_submission_result() always writes an application_events row (status/reason/evidence, never a raw page dump); transitions applications.status -> SUBMITTED only on VERIFIED_SUBMITTED. Every other outcome leaves status untouched (still SUBMITTING) -- no automatic retry/escalation anywhere. A second success-record attempt on an already-SUBMITTED application fails loudly (InvalidStatusTransitionError, existing Phase 1 state machine already forbids SUBMITTED -> SUBMITTED) rather than silently double-writing.",
+  "tdd_note": "Both new modules moved aside first, confirmed ModuleNotFoundError (red for the right reason); restored, 25/26 new browser-level tests passed immediately -- one failure was a test fixture bug (escaped double-quote breaking the HTML onclick= attribute), not production code, found and fixed. Phase 4C's boundary guard updated (submission.py now legitimately exists and clicks Submit exactly once), mirroring how Phase 4D-A updated the same file for questions.py.",
+  "tests_run": "304 passed, 0 failed, 0 skipped (273 baseline + 31 new: 22 dice_browser submission tests, 7 db submission-repository tests, 5 Phase 5 boundary tests -- minus 3 in the Phase 4C boundary file that were updated in place, not net-new)",
+  "production_code_changed": true,
+  "files_changed": ["dice_browser/submission.py", "db/submission_repository.py", "dice_browser/models.py", "tests/test_dice_browser_submission.py", "tests/test_submission_repository.py", "tests/test_phase5_boundary.py", "tests/test_dice_browser_phase4c_boundary.py", "STATE.md", "local_app/app.py"],
+  "human_gate_result": "PENDING -- live submit explicitly not attempted, awaiting explicit approval AND resolution of the session-freshness finding",
+  "next_action": "Do not attempt a live Submit until the auth-freshness concern is resolved (confirm/refresh the session in the dedicated Chrome window) and explicit approval for exactly one live test is given, per the task's Live Test Authorization Boundary.",
+  "outcome": "phase-complete-pending-live-authorization"
+}
+```
