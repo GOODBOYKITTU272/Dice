@@ -81,4 +81,12 @@ def click_next(page: Page) -> bool:
     if not next_button.first.is_visible() or next_button.first.get_attribute("disabled") is not None:
         return False
     next_button.first.click()
+    # Dice's wizard advances via a client-side SPA transition, not a full
+    # navigation -- same class of issue easy_apply.py already handles for
+    # the initial Easy Apply click. Best-effort settle so a caller
+    # inspecting the screen right after doesn't see a mid-transition DOM.
+    try:
+        page.wait_for_load_state("networkidle", timeout=5_000)
+    except Exception:
+        pass
     return True

@@ -170,6 +170,39 @@ def test_click_next_returns_false_when_disabled(page):
     assert page.evaluate("window.__clicked") is not True
 
 
+def test_click_next_waits_for_spa_transition_to_settle(page):
+    # Real bug found live in Phase 6 (2026-08-21): Dice's wizard advances
+    # via a client-side SPA transition (an in-flight API call renders the
+    # next step), not a full page navigation -- the same class of issue
+    # easy_apply.py already had to handle for the initial Easy Apply click
+    # (see its _poll_for_wizard_opened / the comment on why
+    # wait_for_load_state("domcontentloaded") alone isn't reliable here).
+    # click_next() returning immediately after the raw .click() let a
+    # caller (worker.py's question-walk loop) inspect the screen before
+    # the next step's content had rendered, misclassifying a real
+    # Review/question screen as UNKNOWN_SCREEN. Measures wall-clock time
+    # to prove click_next() actually waits for a slow in-flight request
+    # to settle rather than returning as soon as the click dispatches --
+    # checking a JS flag afterward wouldn't prove this, since the page's
+    # own JS event loop keeps running regardless of when the Python call
+    # returns.
+    def _slow_route(route):
+        import time
+
+        time.sleep(0.4)
+        route.fulfill(status=200, body="{}", content_type="application/json")
+
+    page.route("**/slow-transition", _slow_route)
+    page.set_content('<html><body><button onclick="fetch(\'/slow-transition\');">Next</button></body></html>')
+
+    import time
+
+    start = time.monotonic()
+    assert click_next(page) is True
+    elapsed = time.monotonic() - start
+    assert elapsed >= 0.35, f"click_next() returned in {elapsed:.3f}s -- did not wait for the in-flight request to settle"
+
+
 def test_click_next_returns_false_when_ambiguous(page):
     page.set_content(
         """
