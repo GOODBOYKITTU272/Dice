@@ -159,3 +159,40 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T15:00:00Z",
+  "phase": "Phase 3B — Qualification Reliability Study",
+  "task": "Live 120-job batch (4 roles x 30), manual C2C validation (33 jobs), manual Easy Apply validation (20 jobs via live apply-link href ground truth), runtime request audit, parser-tier audit, Supabase overlap/dedup check. Measurement-only, no production changes.",
+  "live_validation": "120 unique jobs, 0 duplicates. Contract/ThirdParty=120 C2C_Confirmed=6 C2C_Likely=35 C2C_Unknown=76 NOT_C2C=3 EasyApply=104. CURRENT_qualified=40 (35/40 = 87.5% dependent on LIKELY) STRICT_qualified=5.",
+  "manual_validation": "33 jobs reviewed. CONFIRMED precision 4/6 (66.7%) — 2 proven false positives. Easy Apply 20/20 matched (0 false positives, 0 false negatives) against live Dice apply-link hrefs.",
+  "bugs_found": "Bug 1: dice/c2c_classifier.py negative-evidence list too narrow (misses 'not accepting C2C', 'No 3rd Party Subcontractors Permitted'). Bug 2: upstream clean_description() glues text across stripped HTML tag boundaries, defeating \\b-boundary regexes (job 660fc20a: 'No C2C' -> 'No C2CPrimary').",
+  "tests_run": "84 passed, 0 failed, 0 skipped (unchanged — measurement only)",
+  "human_gate_result": "2 correctness bugs reported per bug-found protocol, not fixed; decision gate NOT READY FOR PLAYWRIGHT",
+  "outcome": "escalated"
+}
+```
+
+```json
+{
+  "run_id": "2026-08-21T16:00:00Z",
+  "phase": "Phase 3C — C2C Correctness Hardening",
+  "task": "TDD fix for both Phase 3B bugs. Bug 1: broadened dice/c2c_classifier.py negative-evidence detection to 6 new bounded refusal-verb frames (accept/allow/permit-anchored, never require/need). Bug 2: dice/upstream_adapter.py::clean_description() now uses BeautifulSoup get_text(separator=' ') before upstream's cleaner to preserve tag-boundary whitespace. Second-order fix: widened '3rd party' target pattern to tolerate '3 rd' (live Dice HTML sometimes wraps ordinal suffixes in <sup>).",
+  "iteration": "1 of 3 loop-budget attempts used",
+  "hypothesis": "If we improve explicit refusal detection and preserve semantic HTML whitespace, the three known classification failures become NOT_C2C without breaking legitimate C2C positives.",
+  "files_changed": ["dice/c2c_classifier.py", "dice/upstream_adapter.py", "tests/test_c2c_classifier.py", "tests/test_upstream_adapter.py", "STATE.md"],
+  "tests_run": "99 passed, 0 failed, 0 skipped (84 baseline + 15 new: 10 in test_c2c_classifier.py incl. 3 overmatching-guard tests, 5 in test_upstream_adapter.py)",
+  "real_failure_replay": "5c2d489c: CONFIRMED -> NOT_C2C. 173695bb: CONFIRMED -> NOT_C2C. 660fc20a: UNKNOWN -> NOT_C2C. All verified via fresh live re-fetch, not stale stored text.",
+  "reviewed_sample_replay": "33-job Phase 3B manual sample replayed on stored descriptions: exactly the 2 known false positives corrected, LIKELY (15) and UNKNOWN (9) unchanged, 0 new false positives/negatives introduced. CONFIRMED false positives remaining: 0.",
+  "metric_before": "CONFIRMED precision (reviewed sample) 66.7%; full-120 funnel CONFIRMED=6 NOT_C2C=3 CURRENT_qualified=40 STRICT_qualified=5",
+  "metric_after": "CONFIRMED precision (reviewed sample) 100%; full-120 funnel (stored-text replay) CONFIRMED=4 NOT_C2C=5 CURRENT_qualified=39 STRICT_qualified=4",
+  "unexpected_finding": "Live HTML for job 173695bb marks '3rd' as '3<sup>rd</sup>' — the whitespace fix correctly inserted a space there too ('3 rd Party'), which the initial Bug 1 pattern didn't anticipate. Caught by mandatory live re-validation before claiming done; fixed with one additional bounded pattern + regression test, still within iteration 1.",
+  "circuit_breaker_triggered": "NO",
+  "easy_apply_detector": "unchanged, per explicit lock",
+  "likely_policy": "unchanged, per explicit lock — Phase 3D executive review packet prepared separately, not executed",
+  "human_gate_result": "all acceptance criteria met (3/3 real failures fixed, 0 reviewed CONFIRMED false positives, full suite passes, no regression); committed and pushed",
+  "next_action": "Phase 3D LIKELY policy decision — awaiting explicit executive approval before any implementation",
+  "outcome": "phase-complete"
+}
+```

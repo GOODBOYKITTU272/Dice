@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from bs4 import BeautifulSoup
+
 from jobspy_enhanced.dice import util as upstream_util
 
 
@@ -34,8 +36,22 @@ def try_next_data(soup: Any) -> dict[str, Any] | None:
 def clean_description(raw_description: str) -> str:
     """Unicode-unescape + HTML-strip + whitespace cleanup. Upstream's
     version handles unicode-escaped description text (e.g. \\u2019) that
-    our own tag-strip-only cleaner didn't handle."""
-    return upstream_util.clean_description(raw_description or "")
+    our own tag-strip-only cleaner didn't handle.
+
+    Phase 3C: real job 660fc20a-4e64-4b01-9e10-45232b853c72 proved
+    upstream's own tag-strip (`re.sub(r'<[^>]+>', '', description)`)
+    deletes tags with no replacement text, so directly-abutting block
+    tags (e.g. `<p>No C2C</p><p>Primary Skills</p>`) collapse into
+    "No C2CPrimary Skills" with no space — silently defeating every
+    \\b-boundary regex in dice/c2c_classifier.py at that seam. We insert
+    real whitespace at every tag boundary with BeautifulSoup *before*
+    handing off to upstream, so its unicode-unescape/html-unescape/
+    whitespace-collapse behavior is unchanged; its own tag-strip regex
+    just becomes a no-op since no tags are left by then."""
+    if not raw_description:
+        return ""
+    boundary_preserved = BeautifulSoup(raw_description, "html.parser").get_text(separator=" ")
+    return upstream_util.clean_description(boundary_preserved)
 
 
 def extract_salary_text(description: str, job_data: dict[str, Any] | None = None) -> str | None:

@@ -237,6 +237,49 @@ def test_clean_description_handles_unicode_escapes():
     assert "<br>" not in cleaned
 
 
+# ── Phase 3C: whitespace-preserving HTML normalization ──────────────────
+# Real Dice job 660fc20a-4e64-4b01-9e10-45232b853c72 (see STATE.md Phase
+# 3B) produced "...No C2CPrimary Skills..." from source HTML shaped like
+# "...No C2C</p><p>Primary Skills...", because the old cleaner deleted
+# tags with no replacement text. These tests lock in that adjacent block
+# tags always leave a real space, so \b-boundary classifier regexes never
+# get silently defeated by a collapsed tag boundary again.
+
+
+def test_clean_description_preserves_whitespace_across_p_boundary():
+    raw = "<p>W2 Role - No C2C</p><p>Primary Skills: Java</p>"
+    cleaned = clean_description(raw)
+    assert "No C2C Primary Skills" in cleaned
+    assert "C2CPrimary" not in cleaned
+
+
+def test_clean_description_preserves_whitespace_across_div_and_li_boundaries():
+    raw = "<div>No C2C</div><ul><li>Primary Skills</li><li>Java</li></ul>"
+    cleaned = clean_description(raw)
+    assert "C2CPrimary" not in cleaned
+    assert "SkillsJava" not in cleaned
+
+
+def test_clean_description_preserves_whitespace_with_nested_tags():
+    raw = "<div><p>No <b>C2C</b></p><p><span>Primary</span> Skills</p></div>"
+    cleaned = clean_description(raw)
+    assert "C2CPrimary" not in cleaned
+
+
+def test_clean_description_still_handles_br_tags():
+    raw = "No C2C<br>Primary Skills"
+    cleaned = clean_description(raw)
+    assert "C2CPrimary" not in cleaned
+
+
+def test_negative_c2c_detection_survives_html_boundary_glue():
+    # End-to-end: the exact real-world shape of job 660fc20a's description.
+    raw = "<p>Duration: 6 Months</p><p>W2 Role - No C2C</p><p>Primary Skills: Microsoft Fabric</p>"
+    cleaned = clean_description(raw)
+    result = classify_c2c(cleaned)
+    assert result.status == "NOT_C2C"
+
+
 def test_salary_extraction_from_description():
     text = "This role pays $120,000 - $140,000 annually plus benefits."
     salary = extract_salary_text(text)

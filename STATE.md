@@ -1,6 +1,26 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 3A — safe JobSpy Dice integration, committed)
+Last run: 2026-08-21 (Phase 3C — C2C correctness hardening, COMPLETE, committed and pushed)
+
+## V1 Delivery Board
+
+| Phase | Status |
+|---|---|
+| Phase 1 — Database/Foundation | COMPLETE |
+| Phase 2 — Discovery/Qualification | COMPLETE |
+| Phase 3A — Safe JobSpy Integration | COMPLETE |
+| Phase 3B — Qualification Validation | COMPLETE — identified correctness blockers |
+| Phase 3C — C2C Correctness | COMPLETE |
+| Phase 3D — LIKELY Policy | NOT STARTED (executive review packet prepared, awaiting approval) |
+| Phase 4A — Playwright Reference Audit | NOT STARTED |
+| Phase 4B — Persistent Dice Browser | NOT STARTED |
+| Phase 4C — Easy Apply Navigation + Resume | NOT STARTED |
+| Phase 4D — Application Question Engine | NOT STARTED |
+| Phase 4E — Candidate Adapter | NOT STARTED |
+| Phase 4F — NEEDS_INPUT / Pause-Resume | NOT STARTED |
+| Phase 5 — Submission Verification | NOT STARTED |
+| Phase 6 — Sequential Worker | NOT STARTED |
+| Phase 7 — 20-Job End-to-End V1 | NOT STARTED |
 
 ## Repository Architecture — LOCKED
 
@@ -11,11 +31,43 @@ Last run: 2026-08-21 (Phase 3A — safe JobSpy Dice integration, committed)
 
 ## Current Phase
 
-Phase 3A — COMPLETE (safe JobSpy Dice integration, live-validated and committed)
+Phase 3C — COMPLETE (C2C correctness hardening — both proven Phase 3B bugs fixed, tested, committed, pushed)
 
 ## Next Phase
 
-Not yet defined. Playwright / application execution / candidate-API integration remain explicitly **not started** — none were touched in Phase 3A. Any next phase needs separate approval.
+Phase 3D (LIKELY policy decision) — executive review packet prepared, **not executed**. Playwright / application execution / candidate-API integration remain explicitly **not started**. Any next phase needs separate approval.
+
+## Phase 3B — Qualification Reliability Study (2026-08-21)
+
+Live batch: 120 unique Dice jobs across 4 roles (Software Engineer, Java Developer, Data Engineer, SAP Consultant, 30 each). Funnel: Contract/ThirdParty=120, C2C Confirmed=6, Likely=35, Unknown=76, NOT_C2C=3, Easy Apply=104. **CURRENT qualified=40, STRICT qualified=5. 35/40 (87.5%) of CURRENT-qualified depended on LIKELY.**
+
+Manual validation (33 jobs: all 6 CONFIRMED, 15/35 LIKELY, all 3 NOT_C2C, 9/76 UNKNOWN): CONFIRMED precision 4/6 (66.7%) — **2 proven false positives**, both from negative C2C evidence the classifier failed to detect. Easy Apply: 10 positive + 10 negative manually checked against live Dice pages (apply-link href: `/wizard` = genuine vs `/start-apply` = external) — 0 false positives, 0 false negatives.
+
+**Two bugs found and reported, not fixed in 3B** (measurement-only phase, no production changes):
+- Bug 1 — `dice/c2c_classifier.py`'s negative-evidence list only recognized a handful of literal phrases ("no c2c", "w2 only", etc.), missing common refusal phrasings ("not accepting C2C", "No 3rd Party Subcontractors Permitted"). Jobs `5c2d489c-327d-4a69-8fd3-95b46c004d68` and `173695bb-b7db-427e-b1a9-7b7e8ba0cd20` misclassified CONFIRMED.
+- Bug 2 — upstream `jobspy_enhanced.dice.util.clean_description()` strips HTML tags with no replacement whitespace, so adjacent block tags glue words together (`No C2C</p><p>Primary` → `No C2CPrimary`), defeating `\b`-boundary regexes. Job `660fc20a-4e64-4b01-9e10-45232b853c72` misclassified UNKNOWN instead of NOT_C2C.
+
+Decision gate: **NOT READY FOR PLAYWRIGHT.**
+
+## Phase 3C — C2C Correctness Hardening (2026-08-21)
+
+TDD throughout: failing tests written first for both bugs, confirmed failing for the right reason, then the smallest fix, then full suite.
+
+**Bug 1 fix** (`dice/c2c_classifier.py`): extended `_NEGATIVE_PATTERNS` with 6 new bounded refusal-verb frames (not a proximity/keyword-pile rule) — "not accepting/accept X", "cannot/unable to accept X", "X not accepted/allowed/permitted", "no [3rd-party/outside/external] X permitted", plus direct "no 3rd party"/"no subcontractors". Every frame is anchored on an explicit accept/allow/permit verb, never on require/need, specifically so "we do not require prior C2C experience" can't be misread as a refusal — verified by 3 dedicated overmatching-guard tests plus 3 legitimate-positive-preservation tests.
+
+**Bug 2 fix** (`dice/upstream_adapter.py::clean_description()`): now runs `BeautifulSoup(raw, "html.parser").get_text(separator=" ")` before handing off to upstream's cleaner, so every tag boundary gets a real space; upstream's own unicode-unescape/html-unescape/whitespace-collapse behavior is otherwise unchanged (its own tag-strip regex becomes a no-op since no tags remain by then). Live re-validation surfaced a second-order finding: real Dice HTML sometimes marks ordinal suffixes as `3<sup>rd</sup> Party`, which the whitespace fix correctly turns into "3 rd Party" — `dice/c2c_classifier.py`'s "3rd party" target pattern was widened to `3\s?rd` to tolerate that.
+
+**Real failure replay** (fresh live re-fetch, not stale stored text): all 3 known jobs now correctly return NOT_C2C.
+
+**Reviewed-sample replay** (33-job Phase 3B manual sample, using stored descriptions): exactly 2 changed (the 2 known false positives, CONFIRMED → NOT_C2C); LIKELY (15) and UNKNOWN (9) unchanged — no new false positives or false negatives introduced anywhere in the manually-verified ground truth. **CONFIRMED false positives remaining: 0.** CONFIRMED precision in the reviewed sample: 66.7% → 100%.
+
+**Full-120-job funnel replay** (stored descriptions — Bug 2's benefit only shows on fresh HTML, separately proven via the live re-fetch above): CONFIRMED 6→4, NOT_C2C 3→5, LIKELY unchanged at 35, UNKNOWN unchanged at 76. CURRENT qualified 40→39, STRICT qualified 5→4 (job `173695bb` dropped out of both pools — it was a false positive occupying one of the 5 STRICT slots).
+
+**Tests**: 84 baseline → **99 passed, 0 failed, 0 skipped** (15 new: 10 in `test_c2c_classifier.py`, 5 in `test_upstream_adapter.py`).
+
+**LIKELY policy**: untouched, as scoped. 35/39 (89.7%) of CURRENT-qualified still depends on LIKELY — see the Phase 3D executive review packet.
+
+Decision gate: **PHASE 3C PASS. READY FOR PHASE 3D EXECUTIVE REVIEW** (not executed — awaiting approval).
 
 ## Phase 3A — Safe JobSpy Dice Integration (2026-08-21)
 

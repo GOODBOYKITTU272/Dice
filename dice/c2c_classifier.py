@@ -8,10 +8,19 @@ NOT_C2C / UNKNOWN, from the job description text plus the employment-type
 text as a structural fallback signal.
 
 Rules (explicit, not a loose keyword dump):
-  1. Negative phrases are checked first and are literal, specific phrases
-     (not "any negation of a positive phrase") — exactly the phrases V1
-     asked for: "no c2c", "no corp to corp", "w2 only", "no third parties"
-     (and the "party"/"parties" variant), "no vendors".
+  1. Negative phrases are checked first. Phase 3C broadened this from a
+     handful of literal "no X" phrases to a bounded set of refusal-verb
+     *frames*, because real Dice postings phrase refusal many ways ("not
+     accepting C2C", "No 3rd Party Subcontractors Permitted", "C2C not
+     allowed", "cannot accept C2C"). Each frame is still an explicit,
+     reviewable regex anchored on a specific refusal verb (accept/allow/
+     permit — never "require"/"need"), not a generic "negation word within
+     N characters of C2C" proximity rule. That distinction is deliberate:
+     "we do not require previous C2C experience" or "no prior C2C
+     experience required" must NOT classify NOT_C2C, since they refuse an
+     experience requirement, not the C2C arrangement itself — none of the
+     frames below match "require"/"need", so those sentences correctly
+     fall through untouched.
   2. Positive phrases are similarly literal and specific: "corp to corp",
      "corp-to-corp", "c2c" (word-boundaried so it can't match inside
      another word), "third party candidates", "third party vendors",
@@ -35,12 +44,59 @@ import re
 
 from dice.models import C2CResult
 
+# Shared target alternation used by the Phase 3C refusal frames below —
+# every C2C-adjacent noun a refusal can be phrased about. Deliberately
+# excludes generic words like "experience" or "requirement" so a frame can
+# never fire on an experience-requirement sentence no matter how it reads.
+_C2C_TARGET = r"c2c|corp[\s-]?to[\s-]?corp"
+# "3\s?rd" (not just "3rd") because live Dice HTML sometimes marks the
+# ordinal suffix as <sup>rd</sup> — real job 173695bb-b7db-427e-b1a9-
+# 7b7e8ba0cd20 renders as "3<sup>rd</sup> Party", which the Phase 3C
+# whitespace-boundary fix (dice/upstream_adapter.py) correctly turns into
+# "3 rd Party" (a real tag boundary), not "3rdParty".
+_THIRD_PARTY_TARGET = r"third[\s-]?part(?:y|ies)|3\s?rd[\s-]?part(?:y|ies)"
+_SUBCONTRACTOR_TARGET = r"subcontractors?"
+_VENDOR_TARGET = r"vendors?"
+_ANY_TARGET = f"(?:{_C2C_TARGET}|{_THIRD_PARTY_TARGET}|{_SUBCONTRACTOR_TARGET}|{_VENDOR_TARGET})"
+
 _NEGATIVE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("no c2c", re.compile(r"\bno\s+c2c\b", re.IGNORECASE)),
     ("no corp to corp", re.compile(r"\bno\s+corp[\s-]?to[\s-]?corp\b", re.IGNORECASE)),
     ("w2 only", re.compile(r"\bw[\s-]?2\s+only\b", re.IGNORECASE)),
     ("no third parties", re.compile(r"\bno\s+third[\s-]?part(?:y|ies)\b", re.IGNORECASE)),
     ("no vendors", re.compile(r"\bno\s+vendors?\b", re.IGNORECASE)),
+    # Phase 3C additions — bounded refusal-verb frames (see module
+    # docstring). Each is anchored on accept/allow/permit, never on
+    # require/need, so an experience-requirement sentence can't match.
+    ("no 3rd party", re.compile(rf"\bno\s+(?:{_THIRD_PARTY_TARGET})\b", re.IGNORECASE)),
+    ("no subcontractors", re.compile(rf"\bno\s+(?:{_SUBCONTRACTOR_TARGET})\b", re.IGNORECASE)),
+    (
+        "not accepting c2c-related arrangement",
+        re.compile(rf"\bnot\s+accept(?:ing)?\s+{_ANY_TARGET}\b", re.IGNORECASE),
+    ),
+    (
+        "cannot accept c2c-related arrangement",
+        re.compile(
+            rf"\b(?:cannot|can\s?not|unable\s+to)\s+accept\s+{_ANY_TARGET}\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "c2c-related arrangement not permitted",
+        re.compile(
+            rf"\b{_ANY_TARGET}\s+(?:is\s+|are\s+)?not\s+(?:accepted|allowed|permitted)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "no third-party arrangement permitted",
+        re.compile(
+            rf"\bno\s+(?:{_THIRD_PARTY_TARGET}|outside|external)\s+"
+            rf"(?:{_C2C_TARGET}|{_SUBCONTRACTOR_TARGET}|{_VENDOR_TARGET})\s+"
+            rf"(?:is\s+|are\s+)?(?:permitted|allowed|accepted)\b",
+            re.IGNORECASE,
+        ),
+    ),
 ]
 
 _POSITIVE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
