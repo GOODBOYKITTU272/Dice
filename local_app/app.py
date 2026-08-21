@@ -80,7 +80,11 @@ def jobs():
     if filters["company"]:
         needle = filters["company"].lower()
         rows = [r for r in rows if needle in (r.get("company_name") or "").lower()]
-    return render_template("jobs.html", active="jobs", jobs=rows, filters=filters, error=error)
+    last_role = request.args.get("last_role") or DEFAULT_ROLE
+    last_max_results = request.args.get("last_max_results") or str(DEFAULT_MAX_RESULTS)
+    return render_template(
+        "jobs.html", active="jobs", jobs=rows, filters=filters, error=error, last_role=last_role, last_max_results=last_max_results
+    )
 
 
 @app.route("/jobs/<job_id>")
