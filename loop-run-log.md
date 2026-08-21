@@ -337,3 +337,20 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T22:15:00Z",
+  "phase": "Phase 4D-B/C -- Real Screening-Question Discovery and Extraction",
+  "task": "Search discovery pipeline's CONFIRMED Easy Apply jobs for one with real screening questions (found on job 4/4: Java Developer @ Yashnee Tech Solutions, 3f63223a-1dc9-4af9-914c-4ed01e625d44, 3-step wizard). Captured two real questions field-for-field (radiogroup Yes/No, textarea) via read-only DOM audit. Implemented extraction/classification in dice_browser/questions.py: RADIO + TEXTAREA support, name-attribute-as-question_id policy, RequiredState tri-state (replacing a planned bool -- no required signal exists in the live DOM for either question), NEEDS_INPUT classification for both (no trusted candidate field for either 'willing to come into office' or 'expected salary').",
+  "search_note": "3 other CONFIRMED jobs (QUANTUM TECHNOLOGIES, MSYS Inc. x2) were opened via Easy Apply during the search and turned out to have no questions -- same 2-step Review-only shape as Stefanini. Left untouched at their Review screens, Submit never clicked. Flagged as real (if harmless) mutations at the time.",
+  "tdd_note": "Implementation drafted, then swapped aside; new tests confirmed ImportError (red for the right reason) against the prior Phase 4D-A module; implementation restored, full new suite passed on first run (34/34 in test_dice_browser_questions.py).",
+  "live_validation": "Partial. is_questions_screen() confirmed True against the real live Yashnee Step 2 page. A fresh extract_questions() re-run against that same page (expecting QUESTIONS_PRESENT/2) could not complete -- the tab had already advanced to Step 3 of 3 on its own before the check ran, not from any action this session took (no .click() was ever issued against that tab post-audit). Confirmed via direct inspection the application was NOT submitted (no confirmation text; Submit visible, not clicked); Step 3 shows 'Application Questions * -- Completed'. The generalized is_review_screen() correctly matched this real Step 3 page and extract_questions() correctly returned NO_QUESTIONS_PRESENT there -- incidental but real live confirmation of that generalization. RADIO/TEXTAREA extraction itself is built directly from the exact live DOM captured earlier the same session and passes 23 offline tests reproducing that shape, but a live QUESTIONS_PRESENT/2 re-run against a running page did not occur -- documented as a real gap.",
+  "tests_run": "215 passed, 0 failed, 0 skipped (192 baseline + 23 new)",
+  "production_code_changed": true,
+  "files_changed": ["dice_browser/questions.py", "dice_browser/models.py", "tests/test_dice_browser_questions.py", "STATE.md", "local_app/app.py"],
+  "human_gate_result": "pending -- final report delivered this session, awaiting review",
+  "next_action": "Candidate Adapter (Phase 4E) plus explicit human-input handling for NEEDS_INPUT questions -- the two observed so far (on-site willingness, expected salary) have no auto-answer path and none is being built without a trusted candidate field",
+  "outcome": "phase-complete"
+}
+```

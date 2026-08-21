@@ -71,14 +71,14 @@ class ResumeUploadResult:
 
 
 class QuestionExtractionStatus(str, Enum):
-    """Result of dice_browser.questions.extract_questions(). NO_QUESTIONS_PRESENT
-    is the one real live-verified branch so far (Data Engineer @ Stefanini,
-    2026-08-21): a Review screen with zero supported question controls.
-    QUESTIONS_PRESENT means candidate controls were found but not yet
-    classified -- no live evidence of real question shapes exists yet, so
-    this phase deliberately stops at "something is here" rather than
-    guessing what it is. UNKNOWN_SCREEN means the page isn't a recognized
-    Review screen at all -- never treated as "no questions" by omission."""
+    """Result of dice_browser.questions.extract_questions(). Two live
+    branches verified 2026-08-21: NO_QUESTIONS_PRESENT (Data Engineer @
+    Stefanini and others -- a Review screen with zero question controls)
+    and QUESTIONS_PRESENT (Java Developer @ Yashnee Tech Solutions -- a
+    dedicated "Application Questions" step with real radiogroup/textarea
+    controls). UNKNOWN_SCREEN means the page isn't a recognized Review or
+    Questions screen at all -- never treated as "no questions" by
+    omission."""
 
     NO_QUESTIONS_PRESENT = "NO_QUESTIONS_PRESENT"
     QUESTIONS_PRESENT = "QUESTIONS_PRESENT"
@@ -86,23 +86,56 @@ class QuestionExtractionStatus(str, Enum):
 
 
 class FieldType(str, Enum):
-    """Deliberately minimal -- TEXT/RADIO/SELECT/etc. are not added until
-    a real live question of that shape has actually been observed. Every
-    candidate control found so far is UNSUPPORTED by construction."""
+    """Deliberately minimal -- SELECT/DATE/CHECKBOX/MULTI_SELECT/etc. are
+    not added until a real live question of that shape has actually been
+    observed. RADIO and TEXTAREA are live-verified (Java Developer @
+    Yashnee Tech Solutions, 2026-08-21, job 3f63223a-1dc9-4af9-914c-4ed01e625d44).
+    Anything else found is UNSUPPORTED by construction, never guessed
+    into one of these two."""
 
+    RADIO = "RADIO"
+    TEXTAREA = "TEXTAREA"
     UNSUPPORTED = "UNSUPPORTED"
+
+
+class RequiredState(str, Enum):
+    """Tri-state, not bool. Live evidence (2026-08-21, same job as above):
+    neither observed question exposes a `required`/`aria-required`
+    attribute or a visible required marker -- Dice apparently enforces
+    required-ness only via click-time validation, which is unobservable
+    from static DOM inspection alone. UNKNOWN must never be silently
+    treated as OPTIONAL."""
+
+    REQUIRED = "REQUIRED"
+    OPTIONAL = "OPTIONAL"
+    UNKNOWN = "UNKNOWN"
+
+
+class QuestionStatus(str, Enum):
+    NEEDS_INPUT = "NEEDS_INPUT"
+    UNSUPPORTED = "UNSUPPORTED"
+    ALREADY_ANSWERED = "ALREADY_ANSWERED"
 
 
 @dataclass(frozen=True)
 class QuestionField:
-    """One candidate question control found on a Review/question screen.
-    No live-verified question exists yet, so this intentionally carries
-    only structural facts (id, type, visibility) -- no prompt-extraction
-    or answer-classification logic exists until a real question shape is
-    observed to build it against."""
+    """One question control found on a Review/question screen.
+
+    question_id prefers the DOM `name` attribute (live-verified to be a
+    stable, UUID-shaped Dice question identifier) -- never a React-Aria
+    generated `id` (live-verified to be per-render, not durable). Falls
+    back to a hash of the resolved prompt (still content-stable across
+    reloads), and only as a last resort an explicitly-unstable positional
+    placeholder -- see dice_browser.questions._question_id()."""
 
     question_id: str
+    prompt: str | None
     field_type: FieldType
+    required_state: RequiredState
+    options: tuple[str, ...] | None
+    current_value: str | None
+    helper: str | None
+    status: QuestionStatus
 
 
 @dataclass(frozen=True)

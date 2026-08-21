@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 4D-A — Review-screen/NO_QUESTIONS_PRESENT detection, live-verified on the same qualified job. Phase 4D: IN PROGRESS. Live branch verified: NO_QUESTIONS_PRESENT / DIRECT-TO-REVIEW. Custom question extraction: NOT YET LIVE VERIFIED. Auto-answering: NOT BUILT. Submission: NOT BUILT.)
+Last run: 2026-08-21 (Phase 4D extraction/classification foundation. Real screening questions found live (Java Developer @ Yashnee Tech Solutions, 3-step wizard) and captured field-for-field (radiogroup + textarea, aria-labelledby/describedby, name-as-UUID, no required signal anywhere). No-questions branch: LIVE VERIFIED. Radiogroup/textarea extraction: built directly from live-captured DOM, 23 offline tests passing; a fresh live re-run against Yashnee's own Step 2 was blocked because the tab advanced to Step 3 on its own before the check could run -- not something this session did. Auto-answering: NOT BUILT. Submission: NOT BUILT.)
 
 ## V1 Delivery Board
 
@@ -16,7 +16,7 @@ Last run: 2026-08-21 (Phase 4D-A — Review-screen/NO_QUESTIONS_PRESENT detectio
 | Phase 4B — Persistent Dice Browser | COMPLETE |
 | Phase 4B.1 — Authenticated Session Bootstrap | COMPLETE — human login + CDP-attach, session persists while Chrome stays running |
 | Phase 4C — Easy Apply Navigation + Resume | COMPLETE — Easy Apply + resume replacement both live-verified end to end |
-| Phase 4D — Application Question Engine | IN PROGRESS — Review-screen/NO_QUESTIONS_PRESENT detection live-verified; custom question extraction not yet observed live |
+| Phase 4D — Application Question Engine | IN PROGRESS — extraction/classification built from live-captured RADIO+TEXTAREA evidence; select/date/checkbox-as-question/multi-select not yet observed live |
 | Phase 4E — Candidate Adapter | NOT STARTED |
 | Phase 4F — NEEDS_INPUT / Pause-Resume | NOT STARTED |
 | Phase 5 — Submission Verification | NOT STARTED |
@@ -32,11 +32,25 @@ Last run: 2026-08-21 (Phase 4D-A — Review-screen/NO_QUESTIONS_PRESENT detectio
 
 ## Current Phase
 
-Phase 4D-A — IN PROGRESS. Review-screen / NO_QUESTIONS_PRESENT detection built with TDD and live-verified on the same qualified job used throughout Phase 4C. No question-answering, filling, selecting, or Next/Continue/Back/Submit code exists anywhere in `dice_browser/questions.py` — locked in structurally by a boundary test, not just by omission.
+Phase 4D extraction/classification foundation — IN PROGRESS. Both live branches (no-questions Review screen, and a real Application-Questions screen with radiogroup + textarea controls) are now built with TDD directly from live-captured DOM evidence. No question-answering, filling, selecting, or Next/Continue/Back/Submit code exists anywhere in `dice_browser/questions.py` — locked in structurally by a boundary test, not just by omission.
 
 ## Next Phase
 
-Not yet approved. Need a different Easy Apply job that actually presents custom screening-question controls before the field-type model, answer policy, and candidate mapping from the earlier Phase 4D plan can be built against real evidence rather than assumption. Auto-answering (rest of Phase 4D), submission verification (Phase 5), candidate-API integration (Phase 4E) remain explicitly **not started**.
+Not yet approved. Candidate Adapter (Phase 4E) plus explicit human-input handling for `NEEDS_INPUT` questions (the two observed so far: on-site willingness, expected salary) is the next required capability before auto-answering can exist. Auto-answering itself, submission verification (Phase 5) remain explicitly **not started**.
+
+## Phase 4D-B/C — Real Screening-Question Discovery and Extraction (2026-08-21)
+
+**Job search**: using the existing discovery/qualification pipeline, checked 4 CONFIRMED Easy Apply jobs before finding one with real questions — QUANTUM TECHNOLOGIES (Full Stack Java Developer) and MSYS Inc. ×2 (SAP R2R Consultant, SAP Concur Consultant) all turned out to be the same no-question 2-step shape as Stefanini. **Java Developer with 8+ experience @ Yashnee Tech Solutions Corporation** (`3f63223a-1dc9-4af9-914c-4ed01e625d44`) has a genuine **3-step** wizard: Resume & Cover Letter → **Application Questions** → Review. Transparency note: the three no-question jobs were opened via Easy Apply during the search and left sitting at their Review screens, untouched, Submit never clicked — a real (if harmless) mutation each, flagged at the time.
+
+**Two real questions captured field-for-field** (read-only DOM inspection, no answers entered): a `role="radiogroup"` ("Are you able and willing to regularly come into the office to work?", Yes/No, radios sharing `name="c59c9cd9-8441-4610-8e13-2621ae1669c2"`, prompt/helper linked via `aria-labelledby`/`aria-describedby`) and a `<textarea>` ("What is your expected rate or salary?", `name="96824b6c-c489-4500-9dcc-d82847b7b1b3"`, prompt via `aria-labelledby`, helper text visually adjacent but **not** ARIA-linked). Neither exposes `required`/`aria-required`/a visible marker anywhere — the planned `required: bool` field was wrong; replaced with a `RequiredState` tri-state (`REQUIRED`/`OPTIONAL`/`UNKNOWN`), both questions `UNKNOWN`. No `<fieldset>`s exist on the page — radio grouping happens via shared `name` only. The React-Aria-generated `id`s (`react-aria...`) are per-render, not durable; the `name` UUIDs are the real stable identifiers.
+
+**`dice_browser/questions.py`**: `is_review_screen()` generalized from a literal "Step 2 of 2" to any "Step X of Y" indicator, since Yashnee's wizard proved step counts vary — confirmed correct later the same session when Yashnee's own Step 3 (also a Review screen) matched it. New `is_questions_screen()` detects the "Application Questions" heading + step indicator. `extract_questions()` groups same-`name` radio inputs into one `RADIO` question, extracts `TEXTAREA` questions directly, and classifies everything else (select, native checkbox, custom combobox, plain text input) `UNSUPPORTED` — never guessed into a supported type. `_question_id()` prefers `name`, falls back to a hash of the resolved prompt, and only as a last resort an explicitly-unstable positional placeholder — never the generated `id`. Both observed questions classify `NEEDS_INPUT` (no trusted candidate field exists for either — explicitly not mapped to `willing_to_relocate`, and salary is explicitly never guessed/defaulted/derived from the job's posted range). Still zero `.click()`/`.fill()`/`set_input_files`/`.select_option()`/`.check()` calls anywhere in the module.
+
+**Live validation, partial**: `is_questions_screen()` confirmed `True` against the real live Yashnee Step 2 page. A fresh full `extract_questions()` re-run against that same live page (expecting `QUESTIONS_PRESENT`, count 2) could not be completed — by the time the check ran, the tab had already advanced to **Step 3 of 3** on its own, outside anything this session did (no `.click()` was ever issued against that tab after the read-only audit). Confirmed via direct inspection: the application was **not submitted** (no confirmation/success text anywhere; Submit button present, visible, not clicked) — Step 3 is itself a Review screen showing "Application Questions \* — Completed." The generalized `is_review_screen()` correctly matched this real "Step 3 of 3" page, and `extract_questions()` correctly returned `NO_QUESTIONS_PRESENT` there (no fillable controls on the review step) — real, if incidental, live confirmation of that generalization. The RADIO/TEXTAREA extraction logic itself is built directly from the exact live DOM data captured earlier the same session (real `aria-labelledby`/`aria-describedby` ids, real `name` UUIDs, real prompt/helper text) and passes 23 offline tests reproducing that exact shape — but a live re-run of `extract_questions()` specifically returning `QUESTIONS_PRESENT`/2 against a *running* Dice page did not occur this session. Documented as a real gap, not glossed over.
+
+**Tests**: 192 baseline → **215 passed, 0 failed, 0 skipped** (23 new in `test_dice_browser_questions.py`).
+
+Decision gate: **PHASE 4D EXTRACTION FOUNDATION: COMPLETE for the two observed field shapes (RADIO, TEXTAREA), offline-verified; live re-confirmation of the QUESTIONS_PRESENT path against a running page is still outstanding.**
 
 ## Phase 4D-A — Review-Screen / NO_QUESTIONS_PRESENT Detection (2026-08-21)
 
