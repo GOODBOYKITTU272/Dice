@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 4B.1 / 4C live closure — authenticated session established via CDP-attach, Easy Apply wizard live-verified on one real qualified job. Resume upload blocked by a missing test-resume file, not a code or auth defect.)
+Last run: 2026-08-21 (Phase 4C.1 corrected resume replacement — live-verified end to end. Authentication: VERIFIED — HUMAN + CDP. Easy Apply: VERIFIED. Resume Detection: VERIFIED. Resume Replacement: VERIFIED. Resume Upload: VERIFIED. Questions: NOT BUILT. Submission: NOT BUILT. Phase 4C: COMPLETE.)
 
 ## V1 Delivery Board
 
@@ -15,7 +15,7 @@ Last run: 2026-08-21 (Phase 4B.1 / 4C live closure — authenticated session est
 | Phase 4A — Playwright Reference Audit | COMPLETE |
 | Phase 4B — Persistent Dice Browser | COMPLETE |
 | Phase 4B.1 — Authenticated Session Bootstrap | COMPLETE — human login + CDP-attach, session persists while Chrome stays running |
-| Phase 4C — Easy Apply Navigation + Resume | LIVE-VERIFIED (Easy Apply wizard) — resume upload blocked by missing test-resume file |
+| Phase 4C — Easy Apply Navigation + Resume | COMPLETE — Easy Apply + resume replacement both live-verified end to end |
 | Phase 4D — Application Question Engine | NOT STARTED |
 | Phase 4E — Candidate Adapter | NOT STARTED |
 | Phase 4F — NEEDS_INPUT / Pause-Resume | NOT STARTED |
@@ -32,11 +32,26 @@ Last run: 2026-08-21 (Phase 4B.1 / 4C live closure — authenticated session est
 
 ## Current Phase
 
-Phase 4B.1 / 4C live closure — COMPLETE. Easy Apply wizard live-verified end-to-end on one real qualified job. Resume upload is code-complete and detection-verified live, but the actual upload step is blocked by a missing test-resume file (not attempted with fabricated data), not by auth or code defects.
+Phase 4C — COMPLETE. Easy Apply wizard and resume replacement both live-verified end-to-end on one real qualified job, using one internal test resume file. No question-answering, Next/Continue/Review, or Submit code exists anywhere in this repo — Phase 4C stops immediately after resume success, by construction, not by a runtime check that could be bypassed.
 
 ## Next Phase
 
 Not yet approved. Question answering (Phase 4D), submission verification (Phase 5), candidate-API integration (Phase 4E) remain explicitly **not started**.
+
+## Phase 4C.1 — Corrected Resume Replacement (2026-08-21)
+
+**Context**: the first live upload attempt (below, "Phase 4B.1 / 4C — Live Closure") used a naive `input[type='file'].first`, which landed on the Cover Letter field instead of Resume — self-reported immediately, not discovered by the user. Root cause and fix:
+
+1. **DOM-order scoping first fix**: `_find_resume_file_input()`/`_upload_succeeded()` were scoped by DOM position relative to "Resume \*"/"Cover letter" text landmarks. This fixed the wrong-field write, but live re-investigation found the real wizard exposes **no reachable `<input type=file>` at all** once a resume is already on file — only a `button[aria-label="File options"]` menu trigger.
+2. **Menu-based Replace flow**: `_open_file_options_menu()` uses the button's `aria-controls` attribute — a live-verified React Aria trigger/popup relationship — to resolve the exact menu it opens, never a page-wide `role=menu` search (the page has unrelated nav-dropdown menus, and Cover Letter has its own separate File-options menu right next to Resume's). `_replace_resume_file()` selects exactly the `role="menuitem"` with text "Replace", scoped strictly to that one menu (never Delete, never a page-wide "Replace" match), then hands the file to whichever mechanism Replace triggers — a native file chooser (`page.expect_file_chooser()`) or a newly-revealed Resume-scoped input, falling back safely (no mutation) if neither appears.
+3. **Live retry #1 failed safely, no mutation**: an earlier read-only diagnostic this session had already left the menu open (`aria-expanded="true"`); clicking the trigger again tried to toggle it shut and timed out waiting for a stable click target. Fixed: `_open_file_options_menu()` now checks whether its `aria-controls` target is already visible before clicking, returning it directly if so.
+4. **Success verification false negative, fixed**: the live retry's actual upload succeeded (Resume card correctly showed `test_resume.pdf`), but `_upload_succeeded()`'s DOM-order marker check reported failure — the real page has **two** "Cover letter" text matches (a stepper/nav step label plus the field's own label), and `.first` picked the nav one, which sits earlier in raw DOM order than the genuine Resume evidence, collapsing the before/after window to nothing. Fixed by scoping success to containment within the Resume **card** (`_find_file_card()`, same structural selector already used for the File-options buttons) instead of DOM-order landmarks — sidesteps duplicate-text fragility entirely. DOM-order marker logic kept as a fallback for pages without the card structure (covers the existing offline fixtures).
+
+**Live validation, end to end, on the same application** (`469efdf8-e321-46a1-9346-70870d020736`, Data Engineer, Stefanini — re-confirmed unchanged before every mutating step): Resume card now genuinely shows `test_resume.pdf` / "New file" (verified via card-scoped, read-only re-check after the fix). Cover Letter card's earlier mistaken `test_resume.pdf` attachment is **left untouched**, per explicit instruction not to clean it up without separate authorization. No Next/Continue/Review/Submit was ever clicked; no application was submitted; no second application was created. Chrome left running throughout, never quit.
+
+**Tests**: 169 baseline → **181 passed, 0 failed, 0 skipped** (12 new: menu-scoped Replace selection, native-file-chooser handling, fallback-input handling, safe-stop when neither appears, page-wide/Cover-Letter-menu isolation, card-scoped success verification incl. the duplicate-"Cover letter"-text regression, already-open-menu regression).
+
+Decision gate: **PHASE 4C: COMPLETE.**
 
 ## Phase 4B.1 / 4C — Live Closure (2026-08-21)
 

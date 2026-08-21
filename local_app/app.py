@@ -39,7 +39,7 @@ DELIVERY_BOARD = [
     ("Phase 4A — Reference Audit", "COMPLETE"),
     ("Phase 4B — Persistent Dice Browser", "COMPLETE"),
     ("Phase 4B.1 — Authenticated Session Bootstrap", "COMPLETE"),
-    ("Phase 4C — Easy Apply + Resume", "EASY APPLY VERIFIED — RESUME UPLOAD PENDING TEST FILE"),
+    ("Phase 4C — Easy Apply + Resume", "COMPLETE"),
     ("Phase 4D — Question Engine", "NOT STARTED"),
     ("Phase 4E — Candidate Adapter", "NOT STARTED"),
     ("Phase 4F — NEEDS_INPUT", "NOT STARTED"),
@@ -51,10 +51,12 @@ DELIVERY_BOARD = [
 BROWSER_STATUS = [
     ("Browser Foundation", "COMPLETE"),
     ("Persistent Profile", "VERIFIED"),
-    ("Authentication", "VERIFIED"),  # CDP-attach to a normal, never-quit Chrome -- see STATE.md
+    ("Authentication", "VERIFIED — HUMAN + CDP"),  # CDP-attach to a normal, never-quit Chrome -- see STATE.md
     ("Browser Worker", "NOT RUNNING"),
     ("Easy Apply Entry", "VERIFIED"),
-    ("Resume Upload", "DETECTION VERIFIED — UPLOAD PENDING TEST FILE"),
+    ("Resume Detection", "VERIFIED"),
+    ("Resume Replacement", "VERIFIED"),
+    ("Resume Upload", "VERIFIED"),
     ("Application questions", "NOT BUILT"),
     ("Submission", "NOT BUILT"),
 ]

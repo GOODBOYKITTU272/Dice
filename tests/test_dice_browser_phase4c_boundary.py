@@ -35,11 +35,13 @@ def test_easy_apply_module_never_navigates_past_the_wizard_landing():
 
 
 def test_resume_module_never_clicks_anything_but_change_or_replace():
-    # resume.py may click exactly one kind of thing: the existing-resume
-    # swap control (labeled "Change" on real Dice, "Replace" kept as a
-    # fallback for a different UI variant) -- never Next/Continue/Submit.
+    # resume.py may click exactly four things: the existing-resume swap
+    # control (labeled "Change" on real Dice, "Replace" kept as a fallback
+    # for a different UI variant), a File-options menu trigger button, and
+    # the "Replace" menuitem inside that menu (twice: the direct click and
+    # the one wrapped in expect_file_chooser) -- never Next/Continue/Submit.
     source = (DICE_BROWSER_DIR / "resume.py").read_text(encoding="utf-8")
-    assert source.count(".click()") == 2
+    assert source.count(".click()") == 4
     assert "change" in source.lower()
     assert "replace" in source.lower()
     for forbidden in ("next", "continue", "submit", "review"):

@@ -300,3 +300,24 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T20:00:00Z",
+  "phase": "Phase 4C.1 -- Corrected Resume Replacement",
+  "task": "Fix a real live wrong-field upload bug (test resume landed under Cover Letter instead of Resume, self-reported), then build and live-verify the corrected menu-based Replace workflow: File-options button -> aria-controls-anchored menu -> Replace menuitem (never Delete, never page-wide) -> native file chooser or Resume-scoped input -> success verification scoped strictly to the Resume card.",
+  "bugs_found_and_fixed_with_TDD": [
+    "input[type='file'].first grabbed Cover Letter's input, not Resume's -- fixed with DOM-order scoping relative to 'Resume *'/'Cover letter' text landmarks",
+    "real wizard exposes no reachable <input type=file> at all once a resume is on file -- only a File-options menu button; built _open_file_options_menu()/_replace_resume_file() using the button's aria-controls attribute (a live-verified React Aria trigger/popup relationship) to resolve the exact menu, never a page-wide role=menu search",
+    "live retry #1 timed out clicking a File-options button whose menu an earlier read-only diagnostic had already left open -- fixed by checking whether aria-controls already resolves to a visible menu before clicking",
+    "live retry #2's actual upload succeeded but _upload_succeeded() reported failure -- the real page has two 'Cover letter' text matches (nav step label + field label) and DOM-order scoping via .first picked the wrong one, collapsing the success window to nothing; fixed by scoping success to containment within the Resume card element instead of DOM-order text landmarks"
+  ],
+  "live_validation": "Same application throughout (469efdf8-e321-46a1-9346-70870d020736, Data Engineer, Stefanini), re-confirmed unchanged before every mutating step. Corrected Replace flow executed exactly once; Resume card verified (read-only, card-scoped) to genuinely show test_resume.pdf / 'New file'. Cover Letter's earlier mistaken test_resume.pdf attachment left untouched (no cleanup authorized). No Next/Continue/Review/Submit clicked; no application submitted; no second application created. Chrome left running throughout.",
+  "tests_run": "181 passed, 0 failed, 0 skipped (169 baseline + 12 new)",
+  "production_code_changed": true,
+  "files_changed": ["dice_browser/resume.py", "tests/test_dice_browser_resume.py", "tests/test_dice_browser_phase4c_boundary.py", "STATE.md", "local_app/app.py"],
+  "human_gate_result": "pending -- final report delivered this session, awaiting review",
+  "next_action": "Await approval; Phase 4D (question engine) not yet planned or implemented per explicit instruction",
+  "outcome": "phase-complete"
+}
+```
