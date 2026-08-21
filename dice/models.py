@@ -96,5 +96,57 @@ class DiceJobRecord:
         }
 
 
+class CandidateFetchStatus:
+    """String constants, not an Enum -- matches this file's existing
+    plain-string-status convention (C2CResult.status, EasyApplyResult
+    etc.)."""
+
+    SUCCESS = "SUCCESS"
+    NOT_FOUND = "NOT_FOUND"
+    AUTH_ERROR = "AUTH_ERROR"
+    UPSTREAM_ERROR = "UPSTREAM_ERROR"
+    INVALID_RESPONSE = "INVALID_RESPONSE"
+
+
+@dataclass
+class CandidateProfile:
+    """Normalized candidate facts for DicePilot, mapped from the existing
+    ApplyWizz candidate-details API response (02_ApplyWizz_DicePilot_TRD.pdf
+    section 7, "Candidate Adapter Rules"). This is not a second candidate
+    database -- candidate_id is the only durable reference; every other
+    field is a point-in-time read, re-fetched per use, never persisted as
+    DicePilot's own source of truth.
+
+    Every Optional field is None when the source payload doesn't have a
+    usable value -- missing, null, or malformed input is never defaulted,
+    guessed, or coerced into False/0/"" by dice/candidate_adapter.py."""
+
+    candidate_id: str
+    name: str | None
+    email: str | None
+    phone: str | None
+    location: str | None
+    visa_type: str | None
+    work_authorized: bool | None
+    requires_sponsorship: bool | None
+    willing_to_relocate: bool | None
+    experience_years: float | int | None
+    desired_start_date: str | None
+    resume_url: str | None
+    linkedin_url: str | None
+    github_url: str | None
+
+
+@dataclass
+class CandidateFetchResult:
+    """Result of dice.candidate_adapter.fetch_candidate(). profile is
+    only set when status == SUCCESS. error is a short, non-sensitive
+    diagnostic string -- never a raw response body or candidate payload."""
+
+    status: str  # one of CandidateFetchStatus's constants
+    profile: CandidateProfile | None
+    error: str | None = None
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

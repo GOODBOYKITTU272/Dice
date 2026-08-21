@@ -41,7 +41,7 @@ DELIVERY_BOARD = [
     ("Phase 4B.1 — Authenticated Session Bootstrap", "COMPLETE"),
     ("Phase 4C — Easy Apply + Resume", "COMPLETE"),
     ("Phase 4D — Question Engine", "EXTRACTION FOUNDATION COMPLETE — RADIO/TEXTAREA live-observed + offline-replay verified; select/date/checkbox/multi-select not yet observed"),
-    ("Phase 4E — Candidate Adapter", "NOT STARTED"),
+    ("Phase 4E — Candidate Adapter", "COMPLETE (offline) — live fetch BLOCKED, APPLYWIZZ_API_BASE_URL/TOKEN not configured"),
     ("Phase 4F — NEEDS_INPUT", "NOT STARTED"),
     ("Phase 5 — Submission Verification", "NOT STARTED"),
     ("Phase 6 — Sequential Worker", "NOT STARTED"),
@@ -66,7 +66,10 @@ BROWSER_STATUS = [
     ("Checkbox question", "NOT LIVE VERIFIED"),
     ("Date", "NOT LIVE VERIFIED"),
     ("Multi-select", "NOT LIVE VERIFIED"),
+    ("Candidate source", "ApplyWizz existing candidate-details API"),
+    ("Duplicate candidate truth store", "NO"),
     ("Auto-answering", "NOT BUILT"),
+    ("NEEDS_INPUT", "NOT BUILT"),
     ("Submission", "NOT BUILT"),
 ]
 

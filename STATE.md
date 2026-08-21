@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 4D EXTRACTION FOUNDATION: COMPLETE. Fixed a real Review-vs-Questions false positive found during live revalidation -- a Review screen's own "Application Questions * / Completed" summary text was tricking is_questions_screen() into misreading it as an active questions step; Review detection now wins over any incidental summary text, live-reconfirmed on the real page. NO_QUESTIONS_PRESENT and Review-screen detection: LIVE VERIFIED. RADIO/TEXTAREA extraction: LIVE OBSERVED + OFFLINE REPLAY VERIFIED -- a fresh post-implementation live replay of the questions step itself was not completed (the only observed live questions page moved to Review on its own before it could be re-run), accepted as non-blocking. Auto-answering: NOT BUILT. Submission: NOT BUILT.)
+Last run: 2026-08-21 (Phase 4E Candidate Adapter built: dice/candidate_adapter.py normalizes the existing ApplyWizz candidate-details API response {client, additional_information} into CandidateProfile, per 02_ApplyWizz_DicePilot_TRD.pdf section 7's mapping table. Data read + normalization only -- no browser logic, no question answering, no submission. Unknowns preserved as None throughout, never defaulted. Live validation BLOCKED: APPLYWIZZ_API_BASE_URL/APPLYWIZZ_API_TOKEN are not configured anywhere in this environment -- documented in .env.example, not fabricated. Question auto-answering: NOT BUILT. NEEDS_INPUT handling: NOT BUILT. Submission: NOT BUILT.)
 
 ## V1 Delivery Board
 
@@ -17,7 +17,7 @@ Last run: 2026-08-21 (Phase 4D EXTRACTION FOUNDATION: COMPLETE. Fixed a real Rev
 | Phase 4B.1 — Authenticated Session Bootstrap | COMPLETE — human login + CDP-attach, session persists while Chrome stays running |
 | Phase 4C — Easy Apply Navigation + Resume | COMPLETE — Easy Apply + resume replacement both live-verified end to end |
 | Phase 4D — Application Question Engine | EXTRACTION FOUNDATION COMPLETE — NO_QUESTIONS_PRESENT and Review-screen detection live-verified; RADIO/TEXTAREA live-observed + offline-replay verified; select/date/checkbox-as-question/multi-select not yet observed live; auto-answering not built |
-| Phase 4E — Candidate Adapter | NOT STARTED |
+| Phase 4E — Candidate Adapter | COMPLETE — normalization built and offline-verified; live fetch BLOCKED (APPLYWIZZ_API_BASE_URL/APPLYWIZZ_API_TOKEN not configured) |
 | Phase 4F — NEEDS_INPUT / Pause-Resume | NOT STARTED |
 | Phase 5 — Submission Verification | NOT STARTED |
 | Phase 6 — Sequential Worker | NOT STARTED |
@@ -32,11 +32,27 @@ Last run: 2026-08-21 (Phase 4D EXTRACTION FOUNDATION: COMPLETE. Fixed a real Rev
 
 ## Current Phase
 
-Phase 4D extraction/classification foundation — **COMPLETE**. Both live branches (no-questions Review screen, and a real Application-Questions screen with radiogroup + textarea controls) are built with TDD directly from live-captured DOM evidence, including a real Review-vs-Questions false-positive found and fixed during live revalidation. No question-answering, filling, selecting, or Next/Continue/Back/Submit code exists anywhere in `dice_browser/questions.py` — locked in structurally by a boundary test, not just by omission.
+Phase 4E Candidate Adapter — **COMPLETE** (offline). `dice/candidate_adapter.py` normalizes the existing ApplyWizz candidate-details API response into `CandidateProfile`, per the TRD's Candidate Adapter Rules table, with unknowns preserved as `None` throughout — never defaulted, never guessed. Data read + normalization only: no Dice browser logic, no question answering, no submission. Live fetch against the real API is **BLOCKED** — `APPLYWIZZ_API_BASE_URL`/`APPLYWIZZ_API_TOKEN` aren't configured anywhere in this environment; documented in `.env.example`, not fabricated.
 
 ## Next Phase
 
-Not yet approved. Candidate Adapter (Phase 4E) plus explicit human-input handling for `NEEDS_INPUT` questions (the two observed so far: on-site willingness, expected salary) is the next required capability before auto-answering can exist. Auto-answering itself, submission verification (Phase 5) remain explicitly **not started**.
+Not yet approved. Phase 4F (`NEEDS_INPUT` / pause-resume handling for the questions that can't be auto-answered — on-site willingness, expected salary, plus the three sensitive fields `resolve_candidate_field()` explicitly refuses to resolve) is the next required capability before auto-answering can exist. Auto-answering itself, submission verification (Phase 5) remain explicitly **not started**.
+
+## Phase 4E — Candidate Adapter (2026-08-21)
+
+**Audit** (Part 1): no candidate-details API client exists anywhere in either repo (`Dice` or `Indeed-Scraper`) — confirmed via repo-wide grep, matching the prior `STATE.md` note "client doesn't exist anywhere in this repo yet." The contract is documented, not implemented: `02_ApplyWizz_DicePilot_TRD.pdf` section 7 ("Candidate Adapter Rules") gives the field-mapping table and section 12 names the two required env vars (`APPLYWIZZ_API_BASE_URL`, `APPLYWIZZ_API_TOKEN`); `05_...Backend_Schema.pdf` section 14 gives the response shape: `GET candidate by candidate_id -> client + additional_information payload`. Neither document specifies the exact HTTP path — `dice/candidate_adapter.py` defaults to `{base_url}/candidates/{candidate_id}`, flagged in its own docstring as an inference, not a confirmed contract.
+
+**Two real documentation gaps found, neither guessed shut**: the TRD's mapping table has **no source row for `location` at all** — `CandidateProfile.location` is always `None` until a source field is defined. `contact_email` is documented only as "Defined product policy... not guessed," with no named source field — mapped from `client.email` as the most consistent read of the already-named `client.*` identity fields (`client.id`, `client.full_name`, `client.visa_type`), flagged in the module docstring as an inference pending an explicit product decision.
+
+**`dice/models.py`**: `CandidateProfile` (14 canonical fields, all `Optional` except `candidate_id`) and `CandidateFetchResult` (`status` + `profile` + non-sensitive `error` string) added, following this file's existing plain-`@dataclass`/string-status convention.
+
+**`dice/candidate_adapter.py`** (new): `fetch_candidate(candidate_id)` — explicit outcomes `SUCCESS`/`NOT_FOUND`/`AUTH_ERROR`/`UPSTREAM_ERROR`/`INVALID_RESPONSE`, never a generic `None`. `normalize_candidate_payload(payload)` is pure (no HTTP), independently tested. Every field-level normalizer (`_clean_str`/`_clean_bool`/`_clean_number`) treats missing, null, and malformed source values identically: `None`, never coerced into `False`/`0`/`""`. `requires_sponsorship` follows the TRD's two-tier fallback (`additional_information.require_future_sponsorship`, then `client.sponsorship`) — the only field with a documented fallback. `resolve_candidate_field(candidate, field_name)` defines (not wires in) the future Phase 4D consumption contract, and explicitly refuses to resolve `visa_type`/`work_authorized`/`requires_sponsorship` — those must keep routing through Phase 4D's sensitive/`NEEDS_INPUT` policy. No `willing_to_relocate` → "willing to work onsite" mapping, no invented `desired_salary` field — both explicitly out of scope per instruction.
+
+**Live validation**: **BLOCKED**. `APPLYWIZZ_API_BASE_URL` and `APPLYWIZZ_API_TOKEN` are not set anywhere in this environment (shell, `.env`, or `.env.example` before this session) — confirmed by direct inspection, not assumed. Added both to `.env.example` (names only, no values) so the requirement is documented. No live candidate fetch was attempted with fabricated credentials.
+
+**Tests**: 216 baseline → **245 passed, 0 failed, 0 skipped** (29 new in `test_candidate_adapter.py`). TDD: implementation moved aside, tests confirmed `ModuleNotFoundError` (red for the right reason), implementation restored, full new suite passed on first run.
+
+Decision gate: **PHASE 4E: COMPLETE (offline). Live fetch validation deferred until `APPLYWIZZ_API_BASE_URL`/`APPLYWIZZ_API_TOKEN` are configured.**
 
 ## Backlog / Risk Note — Discovery Data Can Drift Before Application Time (2026-08-21)
 

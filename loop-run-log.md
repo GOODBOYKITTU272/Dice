@@ -371,3 +371,25 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-22T00:00:00Z",
+  "phase": "Phase 4E -- Candidate Adapter",
+  "task": "Build dice/candidate_adapter.py to normalize the existing ApplyWizz candidate-details API response ({client, additional_information}) into a typed CandidateProfile, per 02_ApplyWizz_DicePilot_TRD.pdf section 7's Candidate Adapter Rules table. Data read + normalization only -- no browser logic, no question answering, no submission.",
+  "audit_result": "No candidate-details API client exists anywhere in either repo (Dice or Indeed-Scraper) -- confirmed via repo-wide grep. Contract is documented but unimplemented: TRD section 7 (field mapping), section 12 (APPLYWIZZ_API_BASE_URL/APPLYWIZZ_API_TOKEN env vars), Backend Schema section 14 (response shape: GET candidate -> client + additional_information). Exact HTTP path not documented -- defaulted to {base_url}/candidates/{candidate_id}, flagged as an inference in the module docstring, not a confirmed contract.",
+  "gaps_found_not_guessed_shut": [
+    "TRD's mapping table has no source row for 'location' at all -- CandidateProfile.location is always None",
+    "'contact_email' is documented only as 'Defined product policy... not guessed' with no named source field -- mapped from client.email as the most consistent read of the already-named client.* identity fields, flagged as an inference pending explicit product decision"
+  ],
+  "safety_rules_applied": "Every field-level normalizer (_clean_str/_clean_bool/_clean_number) treats missing, null, and malformed source values identically: None, never coerced into False/0/''. resolve_candidate_field() explicitly refuses to resolve visa_type/work_authorized/requires_sponsorship -- those must keep routing through Phase 4D's sensitive/NEEDS_INPUT policy, never auto-resolved here. No willing_to_relocate -> onsite-question mapping, no invented desired_salary field.",
+  "live_validation": "BLOCKED. APPLYWIZZ_API_BASE_URL and APPLYWIZZ_API_TOKEN are not configured anywhere in this environment (shell, .env, or .env.example before this session) -- confirmed by direct inspection. Added both to .env.example (names only, no values). No live fetch attempted with fabricated credentials.",
+  "tdd_note": "Implementation drafted, then moved aside; tests confirmed ModuleNotFoundError (red for the right reason); implementation restored, full new suite (29 tests) passed on first run.",
+  "tests_run": "245 passed, 0 failed, 0 skipped (216 baseline + 29 new)",
+  "production_code_changed": true,
+  "files_changed": ["dice/candidate_adapter.py", "dice/models.py", "tests/test_candidate_adapter.py", ".env.example", "STATE.md", "local_app/app.py"],
+  "human_gate_result": "pending -- final report delivered this session, awaiting review",
+  "next_action": "Phase 4F NEEDS_INPUT / pause-resume handling, not yet implemented per explicit instruction. Live candidate-fetch validation deferred until real APPLYWIZZ_API_BASE_URL/APPLYWIZZ_API_TOKEN are provided.",
+  "outcome": "phase-complete"
+}
+```
