@@ -106,12 +106,47 @@
   a.job-url { color: #1d4ed8; text-decoration: none; font-size: 0.8rem; }
   a.job-url:hover { text-decoration: underline; }
   .empty { color: #9ca3af; padding: 2rem; text-align: center; }
+
+  .phase-board {
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    border-radius: 0.5rem;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1.5rem;
+  }
+  .phase-board h2 { font-size: 1rem; margin: 0 0 0.75rem; }
+  .phase-board .rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.5rem 1.5rem; }
+  .phase-board .row { display: flex; justify-content: space-between; font-size: 0.85rem; padding: 0.25rem 0; border-bottom: 1px dashed #f1f5f9; }
+  .phase-board .row .k { color: #6b7280; }
+  .phase-board .row .v { font-weight: 600; }
+  .v.built, .v.verified, .v.complete, .v.active { color: #15803d; }
+  .v.not-built, .v.not-tested, .v.not-running, .v.not-enabled, .v.not-started { color: #9ca3af; }
+  .v.in-progress, .v.auth-required, .v.unknown { color: #b45309; }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>DicePilot — Local Discovery</h1>
   <div class="subtitle">Phase 2: discovery only. No applications are submitted, no candidate data is used.</div>
+
+  <div class="phase-board">
+    <h2>V1 Delivery Board</h2>
+    <div class="rows">
+      {% for name, status in delivery_board %}
+      <div class="row"><span class="k">{{ name }}</span><span class="v {{ status|lower|replace(' ', '-') }}">{{ status }}</span></div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="phase-board">
+    <h2>Phase 4B — Browser Foundation Status</h2>
+    <div class="subtitle" style="margin-bottom:0.75rem;">Status only — no browser controls exist on this page. This section reflects the last recorded verification, not a live worker (no worker exists yet).</div>
+    <div class="rows">
+      {% for name, status in browser_status %}
+      <div class="row"><span class="k">{{ name }}</span><span class="v {{ status|lower|replace(' ', '-') }}">{{ status }}</span></div>
+      {% endfor %}
+    </div>
+  </div>
 
   <div class="controls">
     <div class="field">

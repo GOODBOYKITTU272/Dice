@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 3D — LIKELY policy decision, COMPLETE, documentation-only, committed and pushed)
+Last run: 2026-08-21 (Phase 4B — persistent Dice browser foundation, COMPLETE, committed and pushed)
 
 ## V1 Delivery Board
 
@@ -12,8 +12,8 @@ Last run: 2026-08-21 (Phase 3D — LIKELY policy decision, COMPLETE, documentati
 | Phase 3B — Qualification Validation | COMPLETE — identified correctness blockers |
 | Phase 3C — C2C Correctness | COMPLETE |
 | Phase 3D — LIKELY Policy | COMPLETE — LIKELY → HUMAN_REVIEW approved |
-| Phase 4A — Playwright Reference Audit | NOT STARTED |
-| Phase 4B — Persistent Dice Browser | NOT STARTED |
+| Phase 4A — Playwright Reference Audit | COMPLETE |
+| Phase 4B — Persistent Dice Browser | COMPLETE |
 | Phase 4C — Easy Apply Navigation + Resume | NOT STARTED |
 | Phase 4D — Application Question Engine | NOT STARTED |
 | Phase 4E — Candidate Adapter | NOT STARTED |
@@ -31,11 +31,37 @@ Last run: 2026-08-21 (Phase 3D — LIKELY policy decision, COMPLETE, documentati
 
 ## Current Phase
 
-Phase 3D — COMPLETE (LIKELY policy decision recorded, documentation-only)
+Phase 4B — COMPLETE (persistent Dice browser foundation: `dice_browser/` package — session + navigator, no apply-flow logic)
 
 ## Next Phase
 
-Phase 4A (read-only reference-repo audit for the future Playwright worker) — approved to begin. Playwright / application execution / candidate-API integration remain explicitly **not started**.
+Phase 4C (Easy Apply navigation + resume upload) — not yet approved. Application execution, question answering, submission, candidate-API integration remain explicitly **not started**.
+
+## Phase 4A — Playwright Reference Audit (2026-08-21)
+
+Read-only audit of 3 public Dice automation repos (`KrishnaYalamarthi/Dice-Automation`, `AndrewKassab/Dice-AI`, `svrohith9/dice_jobs_ai_automation`) across all 28 requested capabilities. Key findings: none of the three persist authenticated browser state, none genuinely verify submission success, none handle OTP/security challenges, none handle checkbox/select questions. `svrohith9`'s repo has a live, functional LLM-auto-answer pathway that feeds legally-sensitive candidate data (visa/sponsorship/disability/veteran status) into an LLM prompt with no human review — marked DO NOT USE. Playwright recommended over Selenium (auto-waiting locators, native tracing, ergonomic persistent-context API — directly relevant to our hardest gaps). Proposed `dice_browser/` module map reviewed and approved; full capability-by-capability decision matrix and executive packet delivered in-session (not persisted as a separate file — this summary plus the module map below is the durable record).
+
+## Phase 4B — Persistent Dice Browser Foundation (2026-08-21)
+
+**Scope**: browser/session foundation only — `dice_browser/models.py`, `session.py`, `navigator.py`. No resume upload, no question answering, no Next/Review/Submit flow, no submission verification, no candidate API, no worker/orchestration. Those remain later phases.
+
+**Dependency**: `playwright==1.62.0` added to `requirements.txt`; `chromium` browser installed via `playwright install chromium`.
+
+**`session.py`**: `launch_persistent_session()`/`close_persistent_session()` wrap Playwright's `launch_persistent_context()` against a profile directory under `.runtime/browser_profiles/<profile_id>/` (gitignored — verified with `git check-ignore` before any real use). `ProfileLock` is a local pidfile guard (stale locks from dead PIDs are correctly reclaimed) — single-machine V1 scope, not distributed locking. `detect_challenge()` recognizes OTP/CAPTCHA/security-check phrasing and always returns a `ChallengeType`, never attempts to solve one. `is_authenticated()`'s **negative** path (login form, `/dashboard/login`, "Login" link) is confirmed against real live Dice pages; its **positive** path (an account/logout signal) is implemented but **not yet verified against a real authenticated session** — no Dice credentials exist anywhere in this project. Documented as a known limitation, not glossed over.
+
+**`navigator.py`**: `open_job()` opens one already-discovered `canonical_url` (validated to be a `www.dice.com/job-detail/...` URL, explicitly rejecting any `/job-applications/...` path before ever navigating), never runs Dice's own search UI. Returns a `NavigationResult` with `already_applied=None` (not a guessed `False`) whenever not authenticated, since Dice can't show a per-account "applied" state to a logged-out visitor.
+
+**Live-validation finding, corrected same session**: the Phase 4A reference locator `apply-button-wc` (independently used by all 3 audited repos) does **not** appear anywhere in current live Dice markup — confirmed by direct page inspection. `_detect_easy_apply()` was corrected to primarily use the Apply link's own href (`.../job-applications/{id}/wizard` vs `.../start-apply`), the signal already proven 20/20 in Phase 3B live validation, keeping `apply-button-wc` only as a secondary/fallback check. This is a real example of the "Dice's DOM can change without notice" risk flagged (as hypothetical) in the Phase 4A report — now confirmed true, caught by the mandatory live-validation step before claiming done.
+
+**Tests**: 99 baseline → **124 passed, 0 failed, 0 skipped** (25 new: 12 in `test_dice_browser_session.py`, 13 in `test_dice_browser_navigator.py`). Offline tests use `page.set_content()` against synthetic HTML (real Chromium, no live Dice needed) per the phase's TDD requirement.
+
+**Live validation** (unauthenticated only — see credentials note above): launched a real persistent context, opened two real known jobs (`469efdf8-...`, confirmed Easy Apply live in Phase 3B → `easy_apply_visible=True`; `5c2d489c-...`, confirmed not Easy Apply → `easy_apply_visible=False`) — both matched Phase 3B ground truth exactly after the correction above. Profile-in-use guard correctly rejected a second concurrent acquire with a clear PID-based error. Profile closed cleanly, persisted to disk, and was successfully reopened in a second process launch with the same result on re-check — proving genuine restart persistence. 171 real network requests captured across the session; **0** touched `/job-applications/` or `start-apply`.
+
+**Not proven this phase** (explicitly, not silently): reusing a genuinely *authenticated* Dice session, and the positive-authentication-signal code path — both require real Dice credentials, which don't exist anywhere in this project and which I will never enter myself even if provided (credential entry is outside what I'll do regardless of instruction). This is the clearest concrete next dependency before Phase 4C.
+
+**Local UI**: `local_app/templates/index.html`/`app.py` gained two static status boards (V1 Delivery Board, Phase 4B Browser Foundation Status) — server-rendered from a plain Python list in `app.py`, no live polling, no new controls, verified via Flask test client (200, all expected content present). Not coupled to the browser process — consistent with the original "Playwright must never run as a Flask background thread" constraint.
+
+Decision gate: **PHASE 4B PASS. READY FOR PHASE 4C PLANNING** (not executed — awaiting approval; blocked on a real Dice credentials source regardless).
 
 ## V1 Qualification Policy — LOCKED (Phase 3D, 2026-08-21)
 

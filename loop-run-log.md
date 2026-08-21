@@ -209,3 +209,34 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T18:00:00Z",
+  "phase": "Phase 4A — Playwright Reference Audit",
+  "task": "Read-only audit of 3 public Dice automation repos (KrishnaYalamarthi/Dice-Automation, AndrewKassab/Dice-AI, svrohith9/dice_jobs_ai_automation) across all 28 requested capabilities, via a research subagent. No production code touched.",
+  "findings": "None of the 3 persist authenticated browser state; none verify submission success; none handle OTP/challenges; none handle checkbox/select questions. svrohith9's repo has a live LLM-auto-answer pathway feeding legally-sensitive data with no human review -- marked DO NOT USE. Playwright recommended over Selenium.",
+  "production_code_changed": false,
+  "human_gate_result": "module architecture and Playwright-vs-Selenium decision approved",
+  "outcome": "phase-complete"
+}
+```
+
+```json
+{
+  "run_id": "2026-08-21T19:00:00Z",
+  "phase": "Phase 4B — Persistent Dice Browser Foundation",
+  "task": "New dice_browser/ package: models.py, session.py (persistent context, profile lock, auth/challenge detection), navigator.py (opens one known job URL, inspects safety signals, never clicks/searches/initiates an application). TDD throughout, offline tests via page.set_content() synthetic HTML.",
+  "iteration": "1 of 3 loop-budget attempts used",
+  "files_changed": ["dice_browser/__init__.py", "dice_browser/models.py", "dice_browser/session.py", "dice_browser/navigator.py", "tests/test_dice_browser_session.py", "tests/test_dice_browser_navigator.py", "requirements.txt", ".gitignore", "local_app/app.py", "local_app/templates/index.html", "STATE.md"],
+  "tests_run": "124 passed, 0 failed, 0 skipped (99 baseline + 25 new)",
+  "live_validation": "Real persistent Chromium context launched; opened 2 known real jobs matching Phase 3B ground truth exactly after a correction (see unexpected_finding). Profile-in-use guard correctly rejected concurrent acquire. Restart/persistence proven (closed, reopened, same correct result). 171 real requests captured, 0 touched job-applications/start-apply.",
+  "unexpected_finding": "Phase 4A's apply-button-wc reference locator does not exist in current live Dice markup at all (confirmed by direct inspection) -- a real, not hypothetical, instance of the 'Dice DOM can change' risk flagged in the Phase 4A report. Corrected to primarily use the Apply link's own href (wizard vs start-apply, proven 20/20 in Phase 3B), keeping apply-button-wc as a secondary fallback. Caught by the mandatory live-validation step before claiming done; fixed with TDD, still within iteration 1.",
+  "not_proven": "Authenticated session reuse and is_authenticated()'s positive-signal path -- both require real Dice credentials, which do not exist anywhere in this project. Documented as a known limitation, not glossed over.",
+  "circuit_breaker_triggered": "NO",
+  "local_ui": "Two static status boards added (V1 Delivery Board, Phase 4B Browser Foundation Status), server-rendered from a plain list in app.py, no live polling, no new controls, verified via Flask test client",
+  "human_gate_result": "all acceptance criteria met per the phase's own success list except the auth-required live checks (credentials-blocked, disclosed); committed and pushed",
+  "next_action": "Phase 4C planning (Easy Apply navigation + resume) -- blocked on a real Dice credentials source regardless of approval",
+  "outcome": "phase-complete"
+}
+```

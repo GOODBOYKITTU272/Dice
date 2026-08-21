@@ -26,11 +26,47 @@ app = Flask(__name__)
 DEFAULT_ROLE = "Software Engineer"
 DEFAULT_MAX_RESULTS = 5
 
+# Static status boards (Phase 4B) — recorded verification results, not a
+# live worker poll. No worker/browser-control process exists yet to poll;
+# see STATE.md for what each status reflects and when it was last verified.
+DELIVERY_BOARD = [
+    ("Phase 1 — Database/Foundation", "COMPLETE"),
+    ("Phase 2 — Discovery/Qualification", "COMPLETE"),
+    ("Phase 3A — Safe JobSpy Integration", "COMPLETE"),
+    ("Phase 3B — Qualification Validation", "COMPLETE"),
+    ("Phase 3C — C2C Correctness", "COMPLETE"),
+    ("Phase 3D — LIKELY Policy", "COMPLETE"),
+    ("Phase 4A — Reference Audit", "COMPLETE"),
+    ("Phase 4B — Persistent Dice Browser", "COMPLETE"),
+    ("Phase 4C — Easy Apply + Resume", "NOT STARTED"),
+    ("Phase 4D — Question Engine", "NOT STARTED"),
+    ("Phase 4E — Candidate Adapter", "NOT STARTED"),
+    ("Phase 4F — NEEDS_INPUT", "NOT STARTED"),
+    ("Phase 5 — Submission Verification", "NOT STARTED"),
+    ("Phase 6 — Sequential Worker", "NOT STARTED"),
+    ("Phase 7 — 20-Job End-to-End", "NOT STARTED"),
+]
+
+BROWSER_STATUS = [
+    ("Browser Foundation", "COMPLETE"),
+    ("Persistent Profile", "VERIFIED"),
+    ("Authentication", "AUTH REQUIRED"),  # no Dice credentials exist anywhere in this project yet
+    ("Browser Worker", "NOT RUNNING"),
+    ("Easy Apply execution", "NOT ENABLED"),
+    ("Resume upload", "NOT BUILT"),
+    ("Application questions", "NOT BUILT"),
+    ("Submission", "NOT BUILT"),
+]
+
 
 @app.route("/")
 def index():
     return render_template(
-        "index.html", default_role=DEFAULT_ROLE, default_max_results=DEFAULT_MAX_RESULTS
+        "index.html",
+        default_role=DEFAULT_ROLE,
+        default_max_results=DEFAULT_MAX_RESULTS,
+        delivery_board=DELIVERY_BOARD,
+        browser_status=BROWSER_STATUS,
     )
 
 

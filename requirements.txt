@@ -14,6 +14,12 @@ beautifulsoup4
 # ── Local operator UI (Phase 2) ────────────────────────────────────────────────
 flask
 
+# ── Persistent Dice browser foundation (Phase 4B) ──────────────────────────────
+# Pinned to the latest stable at the time this was added. After installing,
+# also run `playwright install chromium` once (downloads the browser binary
+# separately — not part of the pip package).
+playwright==1.62.0
+
 # ── Upstream Dice parsing helpers (Phase 3A) ───────────────────────────────────
 # Pinned deliberately, not left open-ended: no LICENSE file upstream, and we're
 # depending on undocumented behavior (Dice isn't even mentioned in their
