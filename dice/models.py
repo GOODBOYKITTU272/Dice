@@ -28,7 +28,11 @@ class RawSearchResult:
 
 @dataclass
 class JobDetail:
-    """Parsed schema.org JobPosting JSON-LD from a Dice job detail page."""
+    """Parsed job detail. title/description/employment_type/company_name/
+    date_posted/canonical_url come from our own JSON-LD parse or upstream's
+    __NEXT_DATA__ fallback (dice/job_parser.py decides which). salary_text
+    and experience_text are Phase 3A additions, upstream-derived, optional.
+    """
 
     title: str
     description_html: str
@@ -37,6 +41,8 @@ class JobDetail:
     company_name: str | None
     date_posted: str | None
     canonical_url: str
+    salary_text: str | None = None
+    experience_text: str | None = None
 
 
 @dataclass
@@ -69,6 +75,7 @@ class DiceJobRecord:
     is_easy_apply: bool
     easy_apply_evidence: dict[str, Any]
     discovered_at: str
+    raw_metadata: dict[str, Any] | None = None
 
     def to_row(self) -> dict[str, Any]:
         return {
@@ -85,6 +92,7 @@ class DiceJobRecord:
             "is_easy_apply": self.is_easy_apply,
             "easy_apply_evidence": self.easy_apply_evidence,
             "discovered_at": self.discovered_at,
+            "raw_metadata": self.raw_metadata,
         }
 
 

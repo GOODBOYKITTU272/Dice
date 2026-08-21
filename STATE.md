@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 2 durability check — fresh verification, committed)
+Last run: 2026-08-21 (Phase 3A — safe JobSpy Dice integration, committed)
 
 ## Repository Architecture — LOCKED
 
@@ -11,11 +11,33 @@ Last run: 2026-08-21 (Phase 2 durability check — fresh verification, committed
 
 ## Current Phase
 
-Phase 2 — COMPLETE (discovery + qualification pipeline, fresh-verified and committed)
+Phase 3A — COMPLETE (safe JobSpy Dice integration, live-validated and committed)
 
 ## Next Phase
 
-Audit current Phase 2 pipeline against jobspy-enhanced-scraper 1.3.7 and integrate only the safe discovery portions — **not started, pending separate approval**.
+Not yet defined. Playwright / application execution / candidate-API integration remain explicitly **not started** — none were touched in Phase 3A. Any next phase needs separate approval.
+
+## Phase 3A — Safe JobSpy Dice Integration (2026-08-21)
+
+**Dependency**: `jobspy-enhanced-scraper==1.3.7`, pinned in `requirements.txt`. Verified before installing: PyPI's published wheel is byte-identical (SHA-256 match) to the audited GitHub HEAD; re-confirmed after installing by hashing the actually-installed file. No drift since the earlier audit.
+
+**Safety boundary**: `dice/upstream_adapter.py` imports **only** free-standing functions from `jobspy_enhanced.dice.util` (`extract_from_next_data`, `clean_description`, `extract_salary_from_description`, `extract_salary_from_json`, `extract_experience_from_description`). **Never imports or calls `jobspy_enhanced.dice.Dice`** — confirmed by reading `Dice._fetch_job_details()`: every successful parse path unconditionally calls `_apply_w2_c2c_and_link()`, which both infers Easy Apply from URL absence and makes a live GET to `/job-applications/{id}/start-apply`. There's no way to use the `Dice` class without also triggering that, so it's avoided entirely — function-level imports only, each independently audited.
+
+**Adopted from upstream**: `__NEXT_DATA__` parsing as an additional first-try tier (falls through safely to our existing JSON-LD parse if absent or incomplete), `clean_description()` (handles unicode-escaped description text our own stripper didn't), salary and experience text extraction (new capability, stored in `dice_jobs.raw_metadata` — no schema migration, that column already existed for exactly this).
+
+**Explicitly not adopted**: the `Dice` class itself, `scrape_jobs()`, `_apply_w2_c2c_and_link`, `_resolve_apply_redirect`, all apply-URL extraction, `extract_apply_type_from_page`, the entire W2/C2C bucket engine, skills extraction, company-field extraction, the HTML-fallback parsing tier.
+
+**Unchanged, per explicit lock**: `dice/c2c_classifier.py`, `dice/easy_apply_detector.py`, `dice/qualification.py` — zero lines touched. Contract/Third Party search-level filtering in `dice/search.py` — unchanged (confirmed upstream still never sends `filters.employmentType`).
+
+**Tests**: 84 passed, 0 failed, 0 skipped (65 baseline + 19 new `test_upstream_adapter.py`), including two static-analysis tests (via `ast`, not naive text search) proving no DicePilot code imports the `Dice` class or references any `job-applications`/`start-apply` URL pattern in actual code (not docstrings), plus a runtime test that runs a full discovery pass against mocked responses and asserts every `requests.get` call target is either the search page or `/job-detail/` — never `/job-applications/`.
+
+**Live validation** (51 real Dice jobs, 3 roles — Software Engineer, Java Developer, SAP Consultant, ~17 each): Discovered=51, Contract/ThirdParty=51 (search filter working), C2C Confirmed=3, C2C Likely=13, C2C Unknown=34, NOT_C2C=1, Easy Apply verified=41, **Qualified=16**. `salary_text`/`experience_text` populated for 22/51 jobs (upstream's `__NEXT_DATA__` tier was not reachable on any of the 51 — every job fell through to the JSON-LD path, which still successfully extracts salary/experience from description text; the resilience fallback worked exactly as designed even though tier 1 never fired in this sample).
+
+5 targeted spot-checks against **fresh, independent re-fetches** (not the cached validation data) — 3 C2C classifications (1 CONFIRMED, 1 UNKNOWN, 1 NOT_C2C) and 2 Easy Apply signals (1 true, 1 false) — all matched with zero drift. The NOT_C2C case is a good real-world confirmation of the negative-override rule: live description text was *"MUST be worked on a W2 Only. No C2C eligibility..."*, which contains the substring "C2C" (from "No C2C") but correctly classifies NOT_C2C, not CONFIRMED.
+
+**V1 "20 qualifying jobs" question — honest answer**: this specific 51-job sample produced 16 QUALIFIED, just under 20. The ~31% qualification rate strongly suggests a modestly larger batch (e.g. 4 roles × 20 jobs) would comfortably clear 20 — but that hasn't been run yet, so it's a projection, not a confirmed result. Worth an explicit decision on whether to run that larger batch before treating "up to 20 qualifying jobs" as proven.
+
+51 real discovered jobs are now in `dice_jobs` (not cleaned up — genuine discovery output, not test data, same policy as the earlier 5 from your own visual tests).
 
 ## Last Verified Result
 

@@ -13,3 +13,11 @@ beautifulsoup4
 
 # ── Local operator UI (Phase 2) ────────────────────────────────────────────────
 flask
+
+# ── Upstream Dice parsing helpers (Phase 3A) ───────────────────────────────────
+# Pinned deliberately, not left open-ended: no LICENSE file upstream, and we're
+# depending on undocumented behavior (Dice isn't even mentioned in their
+# README) that could change without a visible signal in a future release.
+# Only search/parsing utilities are used — never Dice.scrape() or
+# Dice._fetch_job_details() wholesale (see dice/upstream_adapter.py for why).
+jobspy-enhanced-scraper==1.3.7

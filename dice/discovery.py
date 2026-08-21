@@ -103,6 +103,10 @@ def run_discovery(
             is_easy_apply=easy_apply.is_easy_apply,
             easy_apply_evidence=easy_apply.evidence,
             discovered_at=now_iso(),
+            raw_metadata={
+                "salary_text": detail.salary_text,
+                "experience_text": detail.experience_text,
+            },
         )
 
         try:
@@ -121,6 +125,8 @@ def run_discovery(
         printer(f"      C2C: {c2c.status}")
         printer(f"      Evidence: {evidence_text}")
         printer(f"      Easy Apply: {'YES' if easy_apply.is_easy_apply else 'NO'}")
+        if detail.salary_text or detail.experience_text:
+            printer(f"      Salary: {detail.salary_text or '(none)'}  Experience: {detail.experience_text or '(none)'}")
         printer(f"      Saved: {saved_text}")
         printer(f"      Qualified: {qual.is_qualified} ({qual.reason})")
 
@@ -133,6 +139,8 @@ def run_discovery(
                 "discovery_status": discovery_status,
                 "is_qualified": qual.is_qualified,
                 "qualification_reason": qual.reason,
+                "salary_text": detail.salary_text,
+                "experience_text": detail.experience_text,
             }
         )
         rows.append(row)

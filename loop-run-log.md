@@ -143,3 +143,19 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T14:00:00Z",
+  "phase": "Phase 3A — Safe JobSpy Dice Integration",
+  "task": "Pin jobspy-enhanced-scraper==1.3.7, verify byte-identical to prior audit. Build dice/upstream_adapter.py using only free-standing util functions (never the Dice class). Add __NEXT_DATA__ tier + upstream clean_description/salary/experience extraction to dice/job_parser.py, threaded into raw_metadata (no schema change). C2C classifier, Easy Apply detector, qualification gate, and Contract/ThirdParty search filter left unmodified per explicit lock.",
+  "safety_boundary": "dice/upstream_adapter.py imports only jobspy_enhanced.dice.util functions; never imports/calls jobspy_enhanced.dice.Dice because Dice._fetch_job_details() unconditionally calls _apply_w2_c2c_and_link() on every path, which infers Easy Apply from URL absence and GETs /job-applications/.../start-apply",
+  "files_new": ["dice/upstream_adapter.py", "tests/test_upstream_adapter.py"],
+  "files_modified": ["dice/discovery.py", "dice/job_parser.py", "dice/models.py", "requirements.txt"],
+  "tests_run": "84 passed, 0 skipped, 0 failed (65 baseline + 19 new, incl. ast-based static checks for no-Dice-class-import and no-apply-URL-pattern, plus a runtime mocked-request assertion)",
+  "live_validation": "51 real Dice jobs, 3 roles (Software Engineer, Java Developer, SAP Consultant, ~17 each). Discovered=51 Contract/ThirdParty=51 C2C_Confirmed=3 C2C_Likely=13 C2C_Unknown=34 NOT_C2C=1 EasyApply=41 Qualified=16. 5 targeted spot-checks against fresh independent re-fetches, zero drift found.",
+  "v1_20_jobs_question": "16/51 qualified in this sample, just under 20 — honest result, not yet confirmed at larger scale; projected achievable with a bigger batch but not run",
+  "human_gate_result": "verification clean; committed and pushed",
+  "outcome": "phase-complete"
+}
+```
