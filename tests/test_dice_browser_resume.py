@@ -50,6 +50,31 @@ def test_detect_existing_resume_true_when_replace_control_present(page):
     assert detect_existing_resume(page) is True
 
 
+def test_detect_existing_resume_true_on_real_dice_wizard_shape(page):
+    # Real live finding (Phase 4B.1 live closure, 2026-08-21): the actual
+    # Dice apply-wizard resume step never says "Replace" -- it says
+    # "Change". And a broad "Upload" text check is a false-negative trap:
+    # the SAME page also has an unrelated "Upload your cover letter"
+    # prompt for the separate, optional cover-letter field, which would
+    # incorrectly flip existing-resume detection to False even though a
+    # resume clearly is already on file.
+    page.set_content(
+        """
+        <html><body>
+        <p>Resume *</p>
+        <p>resume.pdf</p>
+        <p>Uploaded to profile on 8/21/2026</p>
+        <button>Change</button>
+        <p>Cover letter</p>
+        <p>Optional</p>
+        <p>Upload your cover letter</p>
+        <input type="file">
+        </body></html>
+        """
+    )
+    assert detect_existing_resume(page) is True
+
+
 def test_detect_existing_resume_true_when_resume_card_marker_present(page):
     page.set_content('<html><body><div class="current-resume-card">my_resume.pdf</div></body></html>')
     assert detect_existing_resume(page) is True

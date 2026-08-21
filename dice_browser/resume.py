@@ -25,17 +25,27 @@ def resume_path_from_env() -> Path:
 
 
 def detect_existing_resume(page: Page) -> bool | None:
-    """TRUE / FALSE / UNKNOWN (None) -- conservative. Exact live selector
-    is unverified (Phase 4B.1 auth prerequisite deferred, see STATE.md);
-    returns None whenever the page doesn't show a clear signal either
-    way, rather than guessing."""
-    has_replace = page.get_by_text("Replace", exact=False).count() > 0
+    """TRUE / FALSE / UNKNOWN (None) -- conservative; returns None
+    whenever the page doesn't show a clear signal either way, rather than
+    guessing.
+
+    Verified live (Phase 4B.1 CDP-attach closure, 2026-08-21) against the
+    real Dice apply wizard's resume step: the control is labeled "Change",
+    never "Replace" (that original guess was stale). "Uploaded to profile"
+    is the real confirmation phrase shown next to an already-on-file
+    resume. A bare "Upload" text check is a false-negative trap -- the
+    same wizard step also shows an unrelated "Upload your cover letter"
+    prompt for the separate, optional cover-letter field; only a
+    resume-specific upload prompt counts as a negative signal."""
+    has_change = page.get_by_text("Change", exact=False).count() > 0
+    has_uploaded_marker = page.get_by_text("Uploaded to profile", exact=False).count() > 0
     has_marker = page.locator("[data-testid*='resume'], [class*='resume-card'], [class*='current-resume']").count() > 0
-    if has_replace or has_marker:
+    has_replace = page.get_by_text("Replace", exact=False).count() > 0  # fallback for a different Dice UI variant
+    if has_change or has_uploaded_marker or has_marker or has_replace:
         return True
 
-    has_upload_prompt = page.get_by_text("Upload", exact=False).count() > 0
-    if has_upload_prompt:
+    has_resume_upload_prompt = page.get_by_text("Upload your resume", exact=False).count() > 0
+    if has_resume_upload_prompt:
         return False
 
     return None
@@ -49,9 +59,15 @@ def upload_resume(page: Page, resume_path: Path | None = None) -> ResumeUploadRe
     existing = detect_existing_resume(page)
 
     if existing:
-        replace_control = page.get_by_text("Replace", exact=False).first
-        if replace_control.count() > 0:
-            replace_control.click()
+        # "Change" verified live (Phase 4B.1); "Replace" kept as a
+        # fallback in case a different Dice UI variant uses that wording.
+        change_control = page.get_by_text("Change", exact=False).first
+        if change_control.count() > 0:
+            change_control.click()
+        else:
+            replace_control = page.get_by_text("Replace", exact=False).first
+            if replace_control.count() > 0:
+                replace_control.click()
 
     file_input = page.locator("input#fsp-fileUpload")
     if file_input.count() == 0:

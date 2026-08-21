@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 4C — Easy Apply entry + resume upload, IMPLEMENTED — LIVE VALIDATION PENDING on the deferred Phase 4B.1 auth prerequisite)
+Last run: 2026-08-21 (Phase 4B.1 / 4C live closure — authenticated session established via CDP-attach, Easy Apply wizard live-verified on one real qualified job. Resume upload blocked by a missing test-resume file, not a code or auth defect.)
 
 ## V1 Delivery Board
 
@@ -14,8 +14,8 @@ Last run: 2026-08-21 (Phase 4C — Easy Apply entry + resume upload, IMPLEMENTED
 | Phase 3D — LIKELY Policy | COMPLETE — LIKELY → HUMAN_REVIEW approved |
 | Phase 4A — Playwright Reference Audit | COMPLETE |
 | Phase 4B — Persistent Dice Browser | COMPLETE |
-| Phase 4B.1 — Authenticated Session Bootstrap | PARTIALLY COMPLETE / DEFERRED — human/external prerequisite, does not block Phase 4C |
-| Phase 4C — Easy Apply Navigation + Resume | IMPLEMENTED — LIVE VALIDATION PENDING |
+| Phase 4B.1 — Authenticated Session Bootstrap | COMPLETE — human login + CDP-attach, session persists while Chrome stays running |
+| Phase 4C — Easy Apply Navigation + Resume | LIVE-VERIFIED (Easy Apply wizard) — resume upload blocked by missing test-resume file |
 | Phase 4D — Application Question Engine | NOT STARTED |
 | Phase 4E — Candidate Adapter | NOT STARTED |
 | Phase 4F — NEEDS_INPUT / Pause-Resume | NOT STARTED |
@@ -32,13 +32,31 @@ Last run: 2026-08-21 (Phase 4C — Easy Apply entry + resume upload, IMPLEMENTED
 
 ## Current Phase
 
-Phase 4C — IMPLEMENTED, **LIVE VALIDATION PENDING** on the deferred Phase 4B.1 auth prerequisite (see below).
+Phase 4B.1 / 4C live closure — COMPLETE. Easy Apply wizard live-verified end-to-end on one real qualified job. Resume upload is code-complete and detection-verified live, but the actual upload step is blocked by a missing test-resume file (not attempted with fabricated data), not by auth or code defects.
 
 ## Next Phase
 
-Not yet approved. Question answering (Phase 4D), submission verification (Phase 5), candidate-API integration (Phase 4E) remain explicitly **not started**. Before any of them: complete the Phase 4B.1 human auth bootstrap and run Phase 4C's live validation, so Phase 4D isn't designed against untested assumptions about the Easy Apply/resume DOM.
+Not yet approved. Question answering (Phase 4D), submission verification (Phase 5), candidate-API integration (Phase 4E) remain explicitly **not started**.
 
-## Phase 4C — Easy Apply Entry + Resume Upload (2026-08-21)
+## Phase 4B.1 / 4C — Live Closure (2026-08-21)
+
+**Recovered auth architecture** (supersedes the earlier "deferred, human prerequisite" framing): a `launch_persistent_context()` + full-quit cycle cannot carry Dice's session across a restart — diagnosed live via direct Cookies-DB and Local-Storage inspection (names/hosts only, no values ever read): the account's session material simply never persists to disk, consistent with a true browser-session-lifetime cookie that Chrome deletes on full exit by design. The compliant fix that actually works: launch a normal (non-Playwright) Chrome process against the dedicated profile with a localhost-only `--remote-debugging-port`, let the human log in directly in that real, unautomated browser, then have Playwright **attach** via `chromium.connect_over_cdp()` **without ever quitting Chrome**. No stealth, no fingerprint spoofing, no automation-flag hiding — Google's OAuth block (confirmed persistent across the bundled Chrome-for-Testing build and a real installed Chrome binary, in earlier session attempts) never triggers here because Playwright is never present during the login step at all.
+
+**New standing architecture**: `AUTHENTICATION MODEL` — human logs in via a normal dedicated Chrome process. `RUNTIME MODEL` — that Chrome process stays running (never quit). `AUTOMATION MODEL` — Playwright attaches via localhost CDP for the duration of the session. This replaces "authentication persists across full browser restart" as the requirement; the real requirement is "session continuity while the dedicated Chrome process remains running."
+
+**Three real selector corrections, all found live and fixed with TDD** (same discipline as Phase 4B's `apply-button-wc` finding):
+1. `session.py`'s positive-auth signal — neither of the original guesses (`dashboard/logout`, "Sign Out") ever appears on real Dice pages. The real, stable, non-personal signal is `nav[aria-label="Account"]` (present consistently across page types; the `/dashboard/profiles` "My Profile" link only appears in one nav variant and was kept as a secondary check, not the primary one).
+2. `session.py`'s CAPTCHA detector — a bare `"captcha" in text` substring match is a guaranteed false positive on any page using Google's ubiquitous invisible reCAPTCHA v3 badge, because "reCAPTCHA" lowercased contains "captcha" as a substring. This produced a real false CAPTCHA flag on an ordinary, fully authenticated job page during this session. Fixed to require either the classic visible `.g-recaptcha` widget, a *visible* (not hidden) captcha-sourced iframe, or an action-oriented phrase ("complete the captcha", etc.) — never a bare mention of the word.
+3. `easy_apply.py`'s wizard-open evidence — the guessed `[class*='apply-wizard']` DOM landmark never appears on the real wizard page. The real signals are the exact page title (`"Apply | Dice.com"`) and the visible `"You're Applying for"` heading. Additionally, a single immediate evidence check raced ahead of what appears to be a client-side SPA route transition — replaced with a short, bounded poll (up to 6s) rather than one snapshot in time.
+4. `resume.py`'s existing-resume detection — the real Dice wizard's control is labeled "Change", never "Replace" (kept as a fallback). A bare "Upload" text check was a false-negative trap: the same wizard step shows an unrelated "Upload your cover letter" prompt for the separate, optional cover-letter field, which would have incorrectly flagged a job with an existing resume as having none.
+
+**Live validation, end to end, on one real qualified job** (`469efdf8-e321-46a1-9346-70870d020736`, Data Engineer, Stefanini): authenticated=True (real DOM evidence) → known-job navigation confirmed already_applied=False, easy_apply_visible=True → Easy Apply clicked exactly once → wizard confirmed opened at `.../job-applications/469efdf8.../wizard`, title "Apply | Dice.com", "You're Applying for / Data Engineer @ Stefanini... Step 1 of 2 / Resume & Cover Letter" → existing resume (`resume.pdf`, uploaded 8/21/2026) correctly detected. **Stopped there** — no `DICEPILOT_TEST_RESUME_PATH` was configured this session, so no upload was attempted (no fabricated resume file was created under time pressure); no Next/Continue/Review/Submit was ever clicked (no code exists for any of them). Chrome was deliberately left running, not quit, per the new architecture.
+
+**Tests**: 153 baseline → **160 passed, 0 failed, 0 skipped** (7 new regression tests, all capturing real live-observed DOM shapes).
+
+Decision gate: **PHASE 4B.1: PASS. PHASE 4C LIVE VALIDATION: PARTIAL PASS** (Easy Apply fully verified; resume upload verified up to but not including the actual file transfer, blocked by the test-resume prerequisite, not a defect).
+
+## Phase 4C — Easy Apply Entry + Resume Upload (2026-08-21, original implementation)
 
 **Scope**: Easy Apply precondition gate, opening the wizard, resume detection/upload. Nothing past that — no question-answering or Next/Review/Submit module exists anywhere in this repo (verified by a dedicated structural test, not just by omission).
 

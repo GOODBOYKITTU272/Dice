@@ -34,9 +34,13 @@ def test_easy_apply_module_never_navigates_past_the_wizard_landing():
     assert source.count(".click()") == 1
 
 
-def test_resume_module_never_clicks_anything_but_replace():
-    # resume.py may click exactly one thing: the "Replace" control when an
-    # existing resume is detected. No Next/Continue/Submit click exists.
+def test_resume_module_never_clicks_anything_but_change_or_replace():
+    # resume.py may click exactly one kind of thing: the existing-resume
+    # swap control (labeled "Change" on real Dice, "Replace" kept as a
+    # fallback for a different UI variant) -- never Next/Continue/Submit.
     source = (DICE_BROWSER_DIR / "resume.py").read_text(encoding="utf-8")
-    assert source.count(".click()") == 1
+    assert source.count(".click()") == 2
+    assert "change" in source.lower()
     assert "replace" in source.lower()
+    for forbidden in ("next", "continue", "submit", "review"):
+        assert f'"{forbidden}"' not in source.lower() and f"'{forbidden}'" not in source.lower()

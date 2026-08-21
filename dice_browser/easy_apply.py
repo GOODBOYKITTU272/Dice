@@ -42,9 +42,16 @@ def open_easy_apply(page: Page, nav_result: NavigationResult) -> EasyApplyOpenRe
     try:
         page.wait_for_load_state("domcontentloaded", timeout=15_000)
     except Exception:
-        pass  # best-effort settle; evidence check below is what actually decides success
+        pass  # best-effort settle; the bounded poll below is what actually decides success
 
-    if not _wizard_opened(page):
+    # Real live finding (Phase 4B.1 CDP-attach closure, 2026-08-21): Dice's
+    # apply flow behaves like a client-side SPA route change on at least
+    # some paths, so wait_for_load_state("domcontentloaded") isn't a
+    # reliable signal that the new content has rendered -- a single
+    # immediate check reported CLICK_FAILED even though the wizard had, in
+    # fact, opened moments later. Poll briefly (bounded, not aggressive)
+    # rather than trust one snapshot in time.
+    if not _poll_for_wizard_opened(page):
         return EasyApplyOpenResult(
             opened=False,
             current_url=page.url,
@@ -60,16 +67,34 @@ def open_easy_apply(page: Page, nav_result: NavigationResult) -> EasyApplyOpenRe
     )
 
 
+def _poll_for_wizard_opened(page: Page, timeout_seconds: float = 6.0, interval_seconds: float = 0.3) -> bool:
+    import time
+
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if _wizard_opened(page):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval_seconds)
+
+
 def _wizard_opened(page: Page) -> bool:
     # Requires BOTH signals, deliberately -- a URL that happens to contain
     # "job-applications"/"wizard" with no corroborating page content is
     # not trusted alone (a redirect could land there without the flow
-    # actually opening). Exact production DOM selector is a placeholder
-    # pending live-DOM confirmation once the Phase 4B.1 auth prerequisite
-    # is completed (see STATE.md) -- requiring both keeps this
-    # conservative in the meantime: CLICK_FAILED, never a guessed OPENED.
+    # actually opening).
+    #
+    # Verified live (Phase 4B.1 CDP-attach closure, 2026-08-21) against a
+    # genuinely opened Dice apply flow: there is no wizard-specific
+    # data-testid or class anywhere on the real page (the original
+    # [class*='apply-wizard'] guess never matched) -- the real page has
+    # an exact title "Apply | Dice.com" and a visible "You're Applying
+    # for" heading. Both used together, same conservative philosophy.
     url_matches = "job-applications" in page.url and "wizard" in page.url
-    dom_matches = page.locator("[data-testid*='apply-wizard'], [class*='apply-wizard']").count() > 0
+    dom_matches = (
+        _safe_title(page) == "Apply | Dice.com" or page.get_by_text("You're Applying for", exact=False).count() > 0
+    )
     return url_matches and dom_matches
 
 

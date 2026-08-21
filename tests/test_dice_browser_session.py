@@ -144,6 +144,31 @@ def test_detect_challenge_captcha_by_recaptcha_element(page):
     assert detect_challenge(page) == ChallengeType.CAPTCHA
 
 
+def test_detect_challenge_none_on_passive_recaptcha_disclosure_text(page):
+    # Real live finding (Phase 4B.1 live closure, 2026-08-21): a genuine
+    # authenticated Dice job page triggered a CAPTCHA false positive.
+    # Root cause: "reCAPTCHA", lowercased, is "recaptcha" -- which
+    # contains "captcha" as a substring. Google's invisible reCAPTCHA v3
+    # badge injects a passive disclosure sentence like this one on a huge
+    # fraction of the modern web, with no active challenge ever shown.
+    page.set_content(
+        "<html><body><p>This site is protected by reCAPTCHA and the Google "
+        "Privacy Policy and Terms of Service apply.</p></body></html>"
+    )
+    assert detect_challenge(page) is None
+
+
+def test_detect_challenge_none_on_invisible_recaptcha_badge_iframe(page):
+    # The invisible v3 badge iframe is present in the DOM on huge numbers
+    # of ordinary pages without ever presenting a challenge -- its mere
+    # presence must not be treated as a security challenge.
+    page.set_content(
+        '<html><body><iframe src="https://www.google.com/recaptcha/api2/anchor" '
+        'style="width:0;height:0;border:none;visibility:hidden"></iframe></body></html>'
+    )
+    assert detect_challenge(page) is None
+
+
 def test_detect_challenge_security_check(page):
     page.set_content("<html><body><p>We noticed unusual activity — please verify it's you.</p></body></html>")
     from dice_browser.models import ChallengeType
@@ -162,6 +187,32 @@ def test_detect_challenge_security_check(page):
 
 def test_classify_authentication_active_on_positive_fixture(page):
     page.set_content('<html><body><nav><a href="/dashboard/logout">Sign Out</a></nav></body></html>')
+    assert classify_authentication(page) == BrowserState.ACTIVE
+
+
+def test_classify_authentication_active_on_real_dice_account_nav_landmark(page):
+    # Real live finding (Phase 4B.1 live closure, 2026-08-21): the
+    # /dashboard/profiles "My Profile" link only appears in the home-feed
+    # page's nav variant -- the job-detail page's simpler header doesn't
+    # have it, and would incorrectly fall through to NEEDS_INPUT without
+    # this. The nav[aria-label="Account"] landmark (wrapping the account
+    # avatar button) is present consistently across both page types and
+    # carries no personal data.
+    page.set_content(
+        '<html><body><nav aria-label="Account"><button aria-label="ramakrishna chanda">'
+        '<span>RC</span></button></nav></body></html>'
+    )
+    assert classify_authentication(page) == BrowserState.ACTIVE
+
+
+def test_classify_authentication_active_on_real_dice_my_profile_link(page):
+    # Real live Dice authenticated-nav shape, confirmed via CDP attach to
+    # a genuinely logged-in session (Phase 4B.1 live closure, 2026-08-21):
+    # dashboard/logout / "Sign Out" text never actually appears anywhere
+    # on the real page -- that guess was stale, exactly like
+    # apply-button-wc in Phase 4B. The real positive signal is a
+    # "My Profile" link to /dashboard/profiles.
+    page.set_content('<html><body><nav><a href="https://www.dice.com/dashboard/profiles">My Profile</a></nav></body></html>')
     assert classify_authentication(page) == BrowserState.ACTIVE
 
 

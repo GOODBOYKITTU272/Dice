@@ -276,3 +276,27 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T22:00:00Z",
+  "phase": "Phase 4B.1 / 4C -- Live Closure",
+  "task": "Final timeboxed auth-bootstrap attempt. Diagnosed live (Cookies DB + Local Storage, names/hosts only, no values) why launch_persistent_context()+full-quit never carries Dice's session: it behaves like a true browser-session-lifetime cookie. Fixed via CDP-attach: human logs into a normal, non-Playwright Chrome (localhost-only remote-debugging port, dedicated profile), Chrome is never quit, Playwright attaches via connect_over_cdp(). No stealth/fingerprint work at any point.",
+  "attempt_budget": "2 of 2 used (attempt 1: launch-persistent-context + full quit, diagnosed session-only-cookie failure; attempt 2: CDP-attach without quitting, succeeded)",
+  "auth_result": "PASS -- authenticated=True confirmed via real live DOM evidence (nav[aria-label='Account'])",
+  "selector_corrections_found_live_and_fixed_with_TDD": [
+    "session.py positive-auth signal: neither dashboard/logout nor 'Sign Out' ever appears; real signal is nav[aria-label='Account'] (My Profile link kept as secondary, only appears in one nav variant)",
+    "session.py CAPTCHA detector: bare 'captcha' substring match is a guaranteed false positive on any page with Google's invisible reCAPTCHA v3 badge ('reCAPTCHA' lowercased contains 'captcha') -- produced a real false positive on an authenticated job page this session; fixed to require a visible widget/iframe or an action-oriented phrase",
+    "easy_apply.py wizard-open evidence: [class*='apply-wizard'] never appears; real signals are page title 'Apply | Dice.com' and visible 'You're Applying for' text; also replaced a single immediate evidence check with a bounded 6s poll after finding the real click appears to trigger a client-side SPA transition, not always a full navigation",
+    "resume.py existing-resume detection: real control is labeled 'Change', never 'Replace'; a bare 'Upload' text check was a false-negative trap against the same page's unrelated 'Upload your cover letter' prompt"
+  ],
+  "live_validation": "End-to-end on one real qualified job (469efdf8-e321-46a1-9346-70870d020736, Data Engineer, Stefanini): authenticated=True -> already_applied=False, easy_apply_visible=True -> Easy Apply clicked exactly once -> wizard confirmed opened (title 'Apply | Dice.com', 'You're Applying for... Step 1 of 2') -> existing resume (resume.pdf) correctly detected. Stopped there: no DICEPILOT_TEST_RESUME_PATH configured, no upload attempted, no fabricated resume created under pressure. No Next/Continue/Review/Submit clicked -- no such code exists.",
+  "architecture_decision": "AUTHENTICATION MODEL: human logs in via normal dedicated Chrome. RUNTIME MODEL: that Chrome process stays running (never quit). AUTOMATION MODEL: Playwright attaches via localhost CDP. Recorded in STATE.md as the new standing V1 auth architecture, replacing the earlier 'persist across full restart' assumption.",
+  "tests_run": "160 passed, 0 failed, 0 skipped (153 baseline + 7 new, all capturing real live-observed DOM shapes)",
+  "production_code_changed": true,
+  "files_changed": ["dice_browser/session.py", "dice_browser/easy_apply.py", "dice_browser/resume.py", "tests/test_dice_browser_session.py", "tests/test_dice_browser_easy_apply.py", "tests/test_dice_browser_resume.py", "tests/test_dice_browser_phase4c_boundary.py", "STATE.md"],
+  "human_gate_result": "Phase 4B.1 PASS. Phase 4C live validation PARTIAL PASS (Easy Apply fully verified; resume upload verified up to but not including the file transfer itself, blocked by missing test-resume file, not a defect)",
+  "next_action": "Decide whether to configure a real V1 test resume file (outside git) to complete resume-upload live validation, then plan Phase 4D",
+  "outcome": "phase-complete"
+}
+```

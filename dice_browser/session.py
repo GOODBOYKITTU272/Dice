@@ -131,14 +131,33 @@ def close_persistent_session(lock: ProfileLock, context: BrowserContext) -> None
 
 _OTP_PHRASES = ("verification code", "one-time code", "enter the code", "one-time password", " otp ")
 _SECURITY_PHRASES = ("verify it's you", "security check", "device verification", "unusual activity")
+# Action-oriented phrasing only -- NOT a bare "captcha" substring match.
+# Real live finding (Phase 4B.1 live closure, 2026-08-21): "reCAPTCHA",
+# lowercased, is "recaptcha", which contains "captcha" -- so a bare
+# substring check fires on Google's ubiquitous passive invisible-badge
+# disclosure sentence ("This site is protected by reCAPTCHA...") that
+# appears on huge numbers of ordinary pages with no challenge ever shown.
+_CAPTCHA_PHRASES = ("complete the captcha", "solve the captcha", "captcha verification", "captcha challenge")
 
 
 def detect_challenge(page: Page) -> ChallengeType | None:
     text = (page.inner_text("body") if page.locator("body").count() > 0 else "").lower()
 
-    if page.locator(".g-recaptcha, iframe[src*='captcha'], iframe[title*='captcha' i]").count() > 0:
+    # .g-recaptcha is the classic visible checkbox-widget container -- a
+    # real interactive challenge, not a passive badge.
+    if page.locator(".g-recaptcha").count() > 0:
         return ChallengeType.CAPTCHA
-    if "captcha" in text:
+    # A captcha/recaptcha-sourced iframe only counts if actually VISIBLE --
+    # Google's invisible v3 badge iframe is deliberately excluded here
+    # (its mere presence in the DOM is not itself a challenge; see the
+    # regression test). Checked defensively (element could detach mid-check).
+    for frame_el in page.locator("iframe[src*='captcha' i], iframe[title*='captcha' i]").all():
+        try:
+            if frame_el.is_visible():
+                return ChallengeType.CAPTCHA
+        except Exception:
+            continue
+    if any(phrase in text for phrase in _CAPTCHA_PHRASES):
         return ChallengeType.CAPTCHA
     if any(phrase in text for phrase in _OTP_PHRASES):
         return ChallengeType.OTP
@@ -160,8 +179,21 @@ def _has_negative_auth_signal(page: Page) -> bool:
 
 
 def _has_positive_auth_signal(page: Page) -> bool:
-    # See module-level caveat above: not yet live-verified against a real
-    # authenticated session (Phase 4B.1 is what verifies/corrects this).
+    # Verified live (Phase 4B.1 CDP-attach closure, 2026-08-21) against a
+    # genuinely authenticated Dice session, across two different page
+    # types (home-feed and job-detail, which render different header
+    # variants): nav[aria-label="Account"] (wrapping the account avatar
+    # button) is present consistently on both -- unlike the
+    # /dashboard/profiles "My Profile" link, which only appears in the
+    # home-feed nav variant and would leave job-detail pages incorrectly
+    # falling through to NEEDS_INPUT. dashboard/logout / "Sign Out" never
+    # appeared anywhere on the real page -- that original guess was
+    # stale, exactly like apply-button-wc in Phase 4B. All kept as
+    # fallback signals in case a different Dice UI variant shows them.
+    if page.locator("nav[aria-label='Account']").count() > 0:
+        return True
+    if page.locator("a[href*='dashboard/profiles']").count() > 0:
+        return True
     if page.locator("a[href*='dashboard/logout']").count() > 0:
         return True
     if page.get_by_text("Sign Out", exact=False).count() > 0:

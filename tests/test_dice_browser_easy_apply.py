@@ -103,7 +103,79 @@ def test_opens_when_all_preconditions_pass_and_wizard_evidence_present(page):
         lambda route: route.fulfill(
             status=200,
             content_type="text/html",
-            body='<html><body><div class="apply-wizard">Wizard content</div></body></html>',
+            body="<html><head><title>Apply | Dice.com</title></head><body>"
+            "<h1>You're Applying for</h1></body></html>",
+        ),
+    )
+    page.set_content(
+        '<html><body><a href="https://www.dice.com/job-applications/abc123/wizard">Apply Now</a></body></html>'
+    )
+    result = open_easy_apply(page, _nav_result())
+    assert result.opened is True
+    assert result.reason == "OPENED"
+
+
+def test_opens_correctly_when_wizard_evidence_arrives_slightly_after_click(page):
+    # Real live finding (Phase 4B.1 CDP-attach closure, 2026-08-21): on a
+    # genuinely authenticated live click, the wizard DID open (confirmed
+    # by inspecting the page moments later) but open_easy_apply() reported
+    # CLICK_FAILED -- Dice's apply flow appears to be a client-side SPA
+    # route change, not always a full page reload, so
+    # wait_for_load_state("domcontentloaded") isn't a reliable signal that
+    # the new content has actually rendered yet. This fixture simulates a
+    # click handler that updates the DOM slightly after the click
+    # returns (via setTimeout), and the fix must tolerate that with a
+    # short bounded wait rather than checking exactly once immediately.
+    # pushState/replaceState to a cross-origin URL silently no-ops from
+    # about:blank, so a real https://www.dice.com/... origin is
+    # established first via route interception before simulating the
+    # delayed client-side transition -- this is what lets replaceState
+    # actually take effect in this offline test, same-origin.
+    page.route(
+        "**/job-detail/abc123",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="text/html",
+            body="""
+            <html><body>
+            <a id="apply-link" href="/job-applications/abc123/wizard">Apply Now</a>
+            <script>
+            document.getElementById('apply-link').addEventListener('click', (e) => {
+                e.preventDefault();
+                setTimeout(() => {
+                    history.replaceState({}, '', '/job-applications/abc123/wizard');
+                    document.title = 'Apply | Dice.com';
+                    document.body.innerHTML = "<h1>You're Applying for</h1>";
+                }, 600);
+            });
+            </script>
+            </body></html>
+            """,
+        ),
+    )
+    page.goto("https://www.dice.com/job-detail/abc123")
+    result = open_easy_apply(page, _nav_result())
+    assert result.opened is True
+    assert result.reason == "OPENED"
+
+
+def test_opens_on_real_dice_wizard_page_shape(page):
+    # Real live finding (Phase 4B.1 CDP-attach closure, 2026-08-21): the
+    # guessed [class*='apply-wizard']/[data-testid*='apply-wizard'] DOM
+    # landmark never appears anywhere on the real wizard page -- confirmed
+    # by direct inspection of a genuinely opened Dice apply flow. The real
+    # page has no wizard-specific data-testid at all; the reliable
+    # landmarks are the exact page title ("Apply | Dice.com") and the
+    # visible "You're Applying for" heading text.
+    page.route(
+        "**/job-applications/abc123/wizard",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="text/html",
+            body="<html><head><title>Apply | Dice.com</title></head><body>"
+            "<h1>You're Applying for</h1><p>Data Engineer @ Stefanini</p>"
+            "<p>Step 1 of 2</p><p>Resume &amp; Cover Letter</p>"
+            "</body></html>",
         ),
     )
     page.set_content(
