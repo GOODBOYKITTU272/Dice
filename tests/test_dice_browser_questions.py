@@ -175,6 +175,38 @@ def test_is_review_screen_generalizes_beyond_step_2_of_2(page):
     assert is_review_screen(page) is True
 
 
+_REAL_YASHNEE_STEP3_REVIEW_WITH_COMPLETED_QUESTIONS_SUMMARY = """
+<html><body>
+<div>Step 3 of 3</div>
+<h2>Review your application</h2>
+<p>Take a moment to review the documents you're submitting for this application. Once you submit, this action cannot be undone.</p>
+<div class="self-stretch"><p>Resume *</p><p>resume.pdf</p></div>
+<div class="self-stretch"><p>Cover Letter</p><p>No cover letter uploaded</p></div>
+<div class="self-stretch"><p>Work Authorization *</p><p>US Citizen</p></div>
+<div class="self-stretch"><p>Current Location *</p><p>New York, NY 10001, US</p></div>
+<div class="self-stretch"><p>Application Questions *</p><p>Completed</p></div>
+<input type="checkbox" role="switch" style="display:none">
+<button>Back</button>
+<button>Submit</button>
+</body></html>
+"""
+
+
+def test_review_page_with_completed_questions_summary_is_not_a_questions_screen(page):
+    # Real live regression (2026-08-21, Yashnee Tech Solutions job
+    # 3f63223a-1dc9-4af9-914c-4ed01e625d44, Step 3 of 3): a genuine Review
+    # screen shows a "Application Questions * / Completed" summary line
+    # for the step already finished on Step 2. That incidental text must
+    # never be mistaken for an active Application-Questions step -- Review
+    # detection wins over any summary text it happens to contain.
+    page.set_content(_REAL_YASHNEE_STEP3_REVIEW_WITH_COMPLETED_QUESTIONS_SUMMARY)
+    assert is_review_screen(page) is True
+    assert is_questions_screen(page) is False
+    result = extract_questions(page)
+    assert result.status == QuestionExtractionStatus.NO_QUESTIONS_PRESENT
+    assert result.questions == ()
+
+
 # ── real live shape: Application Questions screen (Yashnee Tech Solutions,
 # job 3f63223a-1dc9-4af9-914c-4ed01e625d44, Step 2 of 3, 2026-08-21) ──────
 

@@ -60,7 +60,17 @@ def is_review_screen(page: Page) -> bool:
 def is_questions_screen(page: Page) -> bool:
     """Explicit, deterministic Application-Questions-screen detection:
     live-verified shape (2026-08-21) is a step indicator plus the
-    "Application Questions" heading."""
+    "Application Questions" heading.
+
+    Real live regression (2026-08-21, Yashnee Tech Solutions job
+    3f63223a-1dc9-4af9-914c-4ed01e625d44, Step 3 of 3): the Review screen
+    itself shows a "Application Questions * / Completed" summary line for
+    the already-finished step, which the heading-text check alone would
+    misread as an active questions step. Review detection wins over any
+    incidental summary text it happens to contain -- never page-wide text
+    alone."""
+    if is_review_screen(page):
+        return False
     body_text = page.inner_text("body")
     has_step = bool(_STEP_INDICATOR_PATTERN.search(body_text))
     has_heading = _QUESTIONS_HEADING_TEXT in body_text

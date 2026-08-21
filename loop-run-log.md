@@ -354,3 +354,20 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T23:00:00Z",
+  "phase": "Phase 4D-D -- Closure: Review-vs-Questions False Positive Fix",
+  "task": "Live revalidation attempt (checked all 5 open tabs, then one new CONFIRMED candidate which turned out AUTH_REQUIRED/stale) surfaced a real detector defect: is_questions_screen() matched the bare substring 'Application Questions' anywhere in body text, which also appears on Yashnee's own Step 3 Review screen as a completed-step summary line. Fixed with TDD (regression fixture reproduces the real Step 3 body text verbatim): is_questions_screen() now returns False whenever is_review_screen() is True -- Review detection wins over any incidental summary text, never a page-wide text match alone.",
+  "decision": "Explicit decision to accept existing live-observed + offline-replay evidence as sufficient for Phase 4D closure rather than keep opening/mutating more applications to reproduce an already-observed page. RADIO/TEXTAREA extraction status recorded truthfully as LIVE OBSERVED + OFFLINE REPLAY VERIFIED, not LIVE VERIFIED -- a fresh post-implementation live replay of the questions step itself was not completed, since the one observed live questions page moved to Review on its own before it could be re-run.",
+  "live_validation": "Fix reconfirmed against the real, still-open Yashnee tab: is_review_screen() -> True, is_questions_screen() -> False, extract_questions() -> NO_QUESTIONS_PRESENT. Stefanini confirmed untouched. No new Easy Apply job opened; no Back/Submit clicked; no application submitted.",
+  "backlog_note_added": "Stored discovery/qualification data can drift before application time -- TalentFish job (173695bb) was stored as Third Party/Easy Apply but is now live AUTH_REQUIRED with W2/Apply-Now content. Not solved; recorded as a requirement for Phase 6's sequential worker to live-recheck eligibility immediately before any mutating action.",
+  "tests_run": "216 passed, 0 failed, 0 skipped (215 baseline + 1 new)",
+  "production_code_changed": true,
+  "files_changed": ["dice_browser/questions.py", "tests/test_dice_browser_questions.py", "STATE.md", "local_app/app.py"],
+  "human_gate_result": "pending -- final report delivered this session, awaiting review",
+  "next_action": "Phase 4E Candidate Adapter, not yet implemented per explicit instruction",
+  "outcome": "phase-complete"
+}
+```

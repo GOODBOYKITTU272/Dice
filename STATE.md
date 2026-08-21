@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 4D extraction/classification foundation. Real screening questions found live (Java Developer @ Yashnee Tech Solutions, 3-step wizard) and captured field-for-field (radiogroup + textarea, aria-labelledby/describedby, name-as-UUID, no required signal anywhere). No-questions branch: LIVE VERIFIED. Radiogroup/textarea extraction: built directly from live-captured DOM, 23 offline tests passing; a fresh live re-run against Yashnee's own Step 2 was blocked because the tab advanced to Step 3 on its own before the check could run -- not something this session did. Auto-answering: NOT BUILT. Submission: NOT BUILT.)
+Last run: 2026-08-21 (Phase 4D EXTRACTION FOUNDATION: COMPLETE. Fixed a real Review-vs-Questions false positive found during live revalidation -- a Review screen's own "Application Questions * / Completed" summary text was tricking is_questions_screen() into misreading it as an active questions step; Review detection now wins over any incidental summary text, live-reconfirmed on the real page. NO_QUESTIONS_PRESENT and Review-screen detection: LIVE VERIFIED. RADIO/TEXTAREA extraction: LIVE OBSERVED + OFFLINE REPLAY VERIFIED -- a fresh post-implementation live replay of the questions step itself was not completed (the only observed live questions page moved to Review on its own before it could be re-run), accepted as non-blocking. Auto-answering: NOT BUILT. Submission: NOT BUILT.)
 
 ## V1 Delivery Board
 
@@ -16,7 +16,7 @@ Last run: 2026-08-21 (Phase 4D extraction/classification foundation. Real screen
 | Phase 4B — Persistent Dice Browser | COMPLETE |
 | Phase 4B.1 — Authenticated Session Bootstrap | COMPLETE — human login + CDP-attach, session persists while Chrome stays running |
 | Phase 4C — Easy Apply Navigation + Resume | COMPLETE — Easy Apply + resume replacement both live-verified end to end |
-| Phase 4D — Application Question Engine | IN PROGRESS — extraction/classification built from live-captured RADIO+TEXTAREA evidence; select/date/checkbox-as-question/multi-select not yet observed live |
+| Phase 4D — Application Question Engine | EXTRACTION FOUNDATION COMPLETE — NO_QUESTIONS_PRESENT and Review-screen detection live-verified; RADIO/TEXTAREA live-observed + offline-replay verified; select/date/checkbox-as-question/multi-select not yet observed live; auto-answering not built |
 | Phase 4E — Candidate Adapter | NOT STARTED |
 | Phase 4F — NEEDS_INPUT / Pause-Resume | NOT STARTED |
 | Phase 5 — Submission Verification | NOT STARTED |
@@ -32,13 +32,19 @@ Last run: 2026-08-21 (Phase 4D extraction/classification foundation. Real screen
 
 ## Current Phase
 
-Phase 4D extraction/classification foundation — IN PROGRESS. Both live branches (no-questions Review screen, and a real Application-Questions screen with radiogroup + textarea controls) are now built with TDD directly from live-captured DOM evidence. No question-answering, filling, selecting, or Next/Continue/Back/Submit code exists anywhere in `dice_browser/questions.py` — locked in structurally by a boundary test, not just by omission.
+Phase 4D extraction/classification foundation — **COMPLETE**. Both live branches (no-questions Review screen, and a real Application-Questions screen with radiogroup + textarea controls) are built with TDD directly from live-captured DOM evidence, including a real Review-vs-Questions false-positive found and fixed during live revalidation. No question-answering, filling, selecting, or Next/Continue/Back/Submit code exists anywhere in `dice_browser/questions.py` — locked in structurally by a boundary test, not just by omission.
 
 ## Next Phase
 
 Not yet approved. Candidate Adapter (Phase 4E) plus explicit human-input handling for `NEEDS_INPUT` questions (the two observed so far: on-site willingness, expected salary) is the next required capability before auto-answering can exist. Auto-answering itself, submission verification (Phase 5) remain explicitly **not started**.
 
-## Phase 4D-B/C — Real Screening-Question Discovery and Extraction (2026-08-21)
+## Backlog / Risk Note — Discovery Data Can Drift Before Application Time (2026-08-21)
+
+Not solved this session, recorded only. While searching for a live questions page (Phase 4D live revalidation), a stored CONFIRMED + Easy Apply candidate — **Senior Software Engineer (JavaScript, MongoDB) @ TalentFish LLC** (`173695bb-b7db-427e-b1a9-7b7e8ba0cd20`) — turned out live to be **`AUTH_REQUIRED`** (confirmed after a wait and a page reload, while other tabs in the same authenticated session stayed `ACTIVE`), and its visible content now reads **"Contract W2" / "Apply Now"** rather than the Third-Party/Easy-Apply shape it had when discovered ("Updated 22 hours ago" per the live page). Stored discovery/qualification data can go stale between discovery time and application time. **Not addressed now** — but the future sequential worker (Phase 6) must perform a live pre-application eligibility recheck immediately before any mutating action, not trust stored `is_easy_apply`/`c2c_status` alone.
+
+## Phase 4D-B/C/D — Real Screening-Question Discovery, Extraction, and Closure (2026-08-21)
+
+**Closure fix (Phase 4D-D)**: live revalidation surfaced a real Review-vs-Questions false positive: `is_questions_screen()` matched on the bare substring "Application Questions" anywhere in body text, which also appears on Yashnee's own **Step 3 Review** screen as a completed-step summary line ("Application Questions \* / Completed"). Fixed with TDD (regression fixture reproduces the real Step 3 body text verbatim) so **Review detection now wins over any incidental summary text it contains** — `is_questions_screen()` returns `False` whenever `is_review_screen()` is `True`, full stop, never a page-wide text match alone. Live-reconfirmed against the real, still-open Yashnee tab: `is_review_screen()` → `True`, `is_questions_screen()` → `False`, `extract_questions()` → `NO_QUESTIONS_PRESENT`. Stefanini confirmed untouched throughout.
 
 **Job search**: using the existing discovery/qualification pipeline, checked 4 CONFIRMED Easy Apply jobs before finding one with real questions — QUANTUM TECHNOLOGIES (Full Stack Java Developer) and MSYS Inc. ×2 (SAP R2R Consultant, SAP Concur Consultant) all turned out to be the same no-question 2-step shape as Stefanini. **Java Developer with 8+ experience @ Yashnee Tech Solutions Corporation** (`3f63223a-1dc9-4af9-914c-4ed01e625d44`) has a genuine **3-step** wizard: Resume & Cover Letter → **Application Questions** → Review. Transparency note: the three no-question jobs were opened via Easy Apply during the search and left sitting at their Review screens, untouched, Submit never clicked — a real (if harmless) mutation each, flagged at the time.
 
@@ -48,9 +54,19 @@ Not yet approved. Candidate Adapter (Phase 4E) plus explicit human-input handlin
 
 **Live validation, partial**: `is_questions_screen()` confirmed `True` against the real live Yashnee Step 2 page. A fresh full `extract_questions()` re-run against that same live page (expecting `QUESTIONS_PRESENT`, count 2) could not be completed — by the time the check ran, the tab had already advanced to **Step 3 of 3** on its own, outside anything this session did (no `.click()` was ever issued against that tab after the read-only audit). Confirmed via direct inspection: the application was **not submitted** (no confirmation/success text anywhere; Submit button present, visible, not clicked) — Step 3 is itself a Review screen showing "Application Questions \* — Completed." The generalized `is_review_screen()` correctly matched this real "Step 3 of 3" page, and `extract_questions()` correctly returned `NO_QUESTIONS_PRESENT` there (no fillable controls on the review step) — real, if incidental, live confirmation of that generalization. The RADIO/TEXTAREA extraction logic itself is built directly from the exact live DOM data captured earlier the same session (real `aria-labelledby`/`aria-describedby` ids, real `name` UUIDs, real prompt/helper text) and passes 23 offline tests reproducing that exact shape — but a live re-run of `extract_questions()` specifically returning `QUESTIONS_PRESENT`/2 against a *running* Dice page did not occur this session. Documented as a real gap, not glossed over.
 
-**Tests**: 192 baseline → **215 passed, 0 failed, 0 skipped** (23 new in `test_dice_browser_questions.py`).
+**Tests**: 192 baseline → 215 passed (23 new) → **216 passed, 0 failed, 0 skipped** after the closure fix (1 more).
 
-Decision gate: **PHASE 4D EXTRACTION FOUNDATION: COMPLETE for the two observed field shapes (RADIO, TEXTAREA), offline-verified; live re-confirmation of the QUESTIONS_PRESENT path against a running page is still outstanding.**
+**Final truthful status, per explicit decision to accept live-observed-plus-offline-replay evidence as sufficient rather than keep mutating more applications to reproduce an already-observed page**:
+- NO_QUESTIONS_PRESENT: **LIVE VERIFIED**
+- Review-screen detection: **LIVE VERIFIED**
+- RADIO extraction: **LIVE OBSERVED + OFFLINE REPLAY VERIFIED**
+- TEXTAREA extraction: **LIVE OBSERVED + OFFLINE REPLAY VERIFIED**
+- NEEDS_INPUT classification: **VERIFIED**
+- Fresh post-implementation live question-step replay: **NOT COMPLETED / NON-BLOCKING** (the one observed live questions page moved to Review on its own before a post-fix replay could run)
+- SELECT / CHECKBOX-as-question / DATE / MULTI_SELECT: **NOT LIVE VERIFIED** — intentional; unknown control types fail safely (`UNSUPPORTED`) rather than block Phase 4E
+- Auto-answering: **NOT BUILT**
+
+Decision gate: **PHASE 4D EXTRACTION FOUNDATION: COMPLETE.**
 
 ## Phase 4D-A — Review-Screen / NO_QUESTIONS_PRESENT Detection (2026-08-21)
 
