@@ -47,6 +47,7 @@ from typing import Any
 
 from playwright.sync_api import Page
 
+import run_registry
 from db.application_repository import (
     add_event,
     claim_next_queued_application,
@@ -259,10 +260,18 @@ def process_one_application(
     worker_id: str,
     submission_policy: SubmissionPolicy = SubmissionPolicy.REQUIRE_CONFIRMATION,
     resume_path=None,
+    claim_fn=None,
 ) -> ApplicationRunResult:
     """Claims and fully processes exactly one QUEUED application --
-    never claims a second one. run_worker() calls this in a loop."""
-    application = claim_next_queued_application(candidate_id, worker_id)
+    never claims a second one. run_worker() calls this in a loop.
+
+    claim_fn, when given, replaces the default "claim the oldest QUEUED
+    application for this candidate" behavior -- run_worker_for_run() uses
+    it to claim one specific, pre-selected application_id instead of
+    querying the DB pool. Every gate below this point (live requalify,
+    Easy Apply, resume, questions, Review, submit) is unchanged and
+    shared by both paths."""
+    application = claim_fn() if claim_fn is not None else claim_next_queued_application(candidate_id, worker_id)
     if application is None:
         return ApplicationRunResult(None, None, StopReason.NOTHING_QUEUED, "no QUEUED application available")
 
@@ -418,6 +427,71 @@ def run_worker(
     return summary
 
 
+def _claim_specific_application(application_id: str, worker_id: str) -> dict[str, Any] | None:
+    """Non-atomic equivalent of claim_next_queued_application(), scoped to
+    one already-known id instead of a pool query -- acceptable here (no
+    new race introduced) because this project is single-worker V1 by
+    design (see this module's own docstring), and a bounded run is
+    processed by exactly one worker process at a time. Returns None if
+    the application isn't QUEUED anymore (already terminal from a prior
+    run, or otherwise moved on) -- the caller treats that as "nothing to
+    do for this id", never as a reason to re-process or re-submit it."""
+    application = get_application(application_id)
+    if application["status"] != "QUEUED":
+        return None
+    return update_application_status(application_id, "PROCESSING", worker_id=worker_id, started_at=application.get("started_at"))
+
+
+def run_worker_for_run(
+    page: Page,
+    run_id: str,
+    worker_id: str,
+    submission_policy: SubmissionPolicy = SubmissionPolicy.REQUIRE_CONFIRMATION,
+    resume_path=None,
+) -> WorkerRunSummary:
+    """Processes exactly the application_ids recorded in run_registry's
+    run -- never a broader DB pool query -- one at a time, in the order
+    selected. This is the critical guarantee behind the Jobs selection UI:
+    "select 5 jobs" can never become "process every queued job", because
+    this loop never asks the database "what's next", only "process this
+    specific id, then that one."
+
+    Halts immediately (not after run_worker()'s 3-strike circuit breaker)
+    on a session-level stop (AUTH_REQUIRED/SECURITY_CHALLENGE) -- every
+    job in one bounded run shares the same auth session, so if job 1
+    can't authenticate, jobs 2-5 will fail identically; no point burning
+    through the rest of the batch to find that out job by job.
+
+    Checks run_registry.is_stopped() before claiming each next id, never
+    mid-flight -- a Stop Run click can't interrupt an in-progress
+    Submit/verification, only prevent the next one from starting."""
+    run = run_registry.get_run(run_id)
+    candidate_id = run["candidate_id"]
+    run_registry.update_run_status(run_id, "RUNNING")
+
+    summary = WorkerRunSummary()
+
+    for application_id in run["application_ids"]:
+        if run_registry.is_stopped(run_id):
+            summary.halted = True
+            summary.halt_reason = "run stopped by operator"
+            break
+
+        def claim_fn(aid: str = application_id) -> dict[str, Any] | None:
+            return _claim_specific_application(aid, worker_id)
+
+        result = process_one_application(page, candidate_id, worker_id, submission_policy, resume_path, claim_fn=claim_fn)
+        summary.processed.append(result)
+
+        if result.stop_reason in _SESSION_LEVEL_STOPS:
+            summary.halted = True
+            summary.halt_reason = f"session-level stop: {result.stop_reason.value}"
+            break
+
+    run_registry.update_run_status(run_id, "STOPPED" if summary.halted else "COMPLETE")
+    return summary
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m dice_browser.worker",
@@ -428,8 +502,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "by itself."
         ),
     )
-    parser.add_argument("--candidate-id", default=None, help="DicePilot candidate_id to process applications for (required unless --resume-application-id is given)")
+    parser.add_argument("--candidate-id", default=None, help="DicePilot candidate_id to process applications for (required unless --resume-application-id or --run-id is given)")
     parser.add_argument("--resume-application-id", default=None, help="Resume one specific NEEDS_INPUT application (calls resume_needs_input_application instead of the normal claim loop)")
+    parser.add_argument("--run-id", default=None, help="Process exactly the application_ids recorded in this run_registry run (calls run_worker_for_run instead of the normal claim loop)")
     parser.add_argument("--cdp-url", default="http://127.0.0.1:9333", help="CDP endpoint of the already-running dedicated Chrome")
     parser.add_argument("--max-applications", type=int, default=1, help="Maximum applications to process this run (default 1)")
     parser.add_argument("--resume-path", default=None, help="Path to the resume file to upload if none is on file")
@@ -445,8 +520,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
 
-    if not args.resume_application_id and not args.candidate_id:
-        print("error: --candidate-id is required unless --resume-application-id is given")
+    if not args.resume_application_id and not args.run_id and not args.candidate_id:
+        print("error: --candidate-id is required unless --resume-application-id or --run-id is given")
         return 2
 
     from playwright.sync_api import sync_playwright
@@ -466,6 +541,18 @@ def main(argv: list[str] | None = None) -> int:
                 resume_path=args.resume_path,
             )
             print(f"{result.application_id or '-'}: {result.stop_reason.value} -- {result.detail}")
+        elif args.run_id:
+            summary = run_worker_for_run(
+                page,
+                args.run_id,
+                worker_id,
+                submission_policy=SubmissionPolicy(args.submission_policy),
+                resume_path=args.resume_path,
+            )
+            for result in summary.processed:
+                print(f"{result.application_id or '-'}: {result.stop_reason.value} -- {result.detail}")
+            if summary.halted:
+                print(f"HALTED: {summary.halt_reason}")
         else:
             summary = run_worker(
                 page,

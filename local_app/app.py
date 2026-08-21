@@ -14,6 +14,7 @@ in-process.
 """
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for  # noqa: E402
 
+import run_registry  # noqa: E402
 from db.application_repository import DuplicateApplicationError, enqueue_application  # noqa: E402
 from db.intervention_repository import (  # noqa: E402
     AlreadyResolvedError,
@@ -39,10 +41,16 @@ app.jinja_env.globals["failure_reason"] = queries.failure_reason
 
 DEFAULT_ROLE = "Software Engineer"
 DEFAULT_MAX_RESULTS = 5
-# The single real candidate this project has used since Phase 6.1 -- no
-# multi-candidate concept exists anywhere in this codebase yet.
-AUTHORIZED_CANDIDATE_ID = "23374e49-9458-4614-ba5a-ae84ccd3b320"
+CANDIDATE_ID_ENV_VAR = "DICEPILOT_CANDIDATE_ID"
 _RESUME_PATH = str(Path(__file__).resolve().parent.parent / ".runtime" / "resume" / "test_resume.pdf")
+
+
+def _authorized_candidate_id() -> str | None:
+    """No hardcoded candidate id anywhere in this file -- configuration
+    only. None means "not configured"; callers must show a clear error
+    and refuse to enqueue/start a worker run, never fall back to a
+    guessed or historical id."""
+    return os.environ.get(CANDIDATE_ID_ENV_VAR)
 
 
 def _client_or_none():
@@ -120,26 +128,77 @@ def jobs_review():
 
 @app.route("/jobs/apply", methods=["POST"])
 def jobs_apply():
-    """Queues the selected, still-eligible jobs for the existing Phase 6
-    worker -- enqueue_application() only, the same call every other queued
-    application in this project goes through. Never touches Dice, never
-    runs the worker, never processes more than one job "in parallel"
-    because nothing here processes a job at all, only queues it."""
+    """Queues the selected, still-eligible jobs (enqueue_application() only
+    -- the same call every other queued application in this project goes
+    through) into a new bounded run_registry run, then launches the
+    existing Phase 6 worker as a detached subprocess scoped to exactly
+    that run. This route itself never touches Dice and never processes a
+    job -- it only writes QUEUED rows and starts a worker process; the
+    worker (run_worker_for_run) is what does the actual, still-sequential
+    processing, one job at a time, using every existing safety gate
+    unchanged."""
+    candidate_id = _authorized_candidate_id()
+    if not candidate_id:
+        return render_template(
+            "jobs_review.html",
+            active="jobs",
+            jobs=[],
+            counts={"total": 0, "confirmed": 0, "likely": 0, "easy_apply": 0},
+            error=f"{CANDIDATE_ID_ENV_VAR} is not configured -- cannot start a run. Set it in your environment/.env.",
+        )
+
     client, error = _client_or_none()
     job_ids = [jid for jid in request.form.getlist("job_id") if jid]
     rows = queries.jobs_by_ids(client, job_ids) if client else []
 
-    queued = 0
+    queued_application_ids: list[str] = []
     for row in rows:
         if row["current_state"] not in queries.SELECTABLE_STATES:
             continue  # re-checked server-side; a stale client selection can't queue an ineligible job
         try:
-            enqueue_application(AUTHORIZED_CANDIDATE_ID, row["id"])
-            queued += 1
+            application = enqueue_application(candidate_id, row["id"])
+            queued_application_ids.append(application["id"])
         except DuplicateApplicationError:
             continue  # already has an application row -- not a duplicate, a no-op
 
-    return redirect(url_for("applications", queued=queued))
+    if not queued_application_ids:
+        return redirect(url_for("applications", queued=0))
+
+    run = run_registry.create_run(queued_application_ids, candidate_id=candidate_id)
+
+    subprocess.Popen(
+        [sys.executable, "-m", "dice_browser.worker", "--run-id", run["id"], "--resume-path", _RESUME_PATH],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    return redirect(url_for("run_progress_view", run_id=run["id"]))
+
+
+@app.route("/runs/<run_id>")
+def run_progress_view(run_id):
+    try:
+        run = run_registry.get_run(run_id)
+    except run_registry.RunNotFoundError:
+        return render_template("run_progress.html", active="jobs", run_id=run_id, progress=None, error="Run not found.")
+
+    client, error = _client_or_none()
+    progress = queries.run_progress(client, run) if client else None
+    return render_template("run_progress.html", active="jobs", run_id=run_id, progress=progress, error=error)
+
+
+@app.route("/runs/<run_id>/stop", methods=["POST"])
+def run_stop_view(run_id):
+    """Sets the run's status to STOPPED -- checked by run_worker_for_run
+    before it claims its NEXT application, never mid-flight. Cannot and
+    does not interrupt a Submit/verification already in progress."""
+    try:
+        run_registry.update_run_status(run_id, "STOPPED")
+    except run_registry.RunNotFoundError:
+        pass
+    return redirect(url_for("run_progress_view", run_id=run_id))
 
 
 @app.route("/api/discover", methods=["POST"])
@@ -307,19 +366,19 @@ _CANDIDATE_FIELDS = [
 
 @app.route("/candidate")
 def candidate_view():
-    import os
-
     configured = bool(os.environ.get("APPLYWIZZ_API_BASE_URL"))
-    candidate_id = request.args.get("candidate_id") or AUTHORIZED_CANDIDATE_ID
+    candidate_id = request.args.get("candidate_id") or _authorized_candidate_id()
     fetch_error = None
     fields = [(label, None, sensitive) for label, _, sensitive in _CANDIDATE_FIELDS]
 
-    if configured:
+    if configured and candidate_id:
         result = fetch_candidate(candidate_id)
         if result.profile is not None:
             fields = [(label, getattr(result.profile, attr), sensitive) for label, attr, sensitive in _CANDIDATE_FIELDS]
         else:
             fetch_error = result.error
+    elif not candidate_id:
+        fetch_error = f"{CANDIDATE_ID_ENV_VAR} is not configured -- set it in your environment/.env to view a candidate."
 
     return render_template(
         "candidate.html", active="candidate", configured=configured, fetch_error=fetch_error, candidate_id=candidate_id, fields=fields

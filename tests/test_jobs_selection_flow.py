@@ -1,8 +1,17 @@
 """Jobs 3-step selection flow (Discover -> Filter & Select -> Review &
 Apply). Real Supabase, disposable TEST- rows cleaned up per test, same
-convention as tests/test_local_app.py. No browser/worker code is ever
-imported or called here -- selection and queueing are pure Flask +
-Supabase, verified structurally by the boundary tests at the bottom.
+convention as tests/test_local_app.py.
+
+Phase 6.2: /jobs/apply now launches the real worker as a subprocess (see
+tests/test_jobs_apply_to_worker.py for that behavior's own coverage) --
+subprocess.Popen is mocked and run_registry.RUNS_DIR is isolated for
+every test in this file so none of them can ever spawn a real worker
+process or write a real run file, regardless of which test happens to
+POST to /jobs/apply. (A real subprocess briefly ran during this file's
+own development, before this fixture existed -- against a disposable
+TEST- job that was already cleaned up before it could do anything, but a
+real page load against the live authenticated Dice session still
+happened. This fixture is the fix.)
 """
 from __future__ import annotations
 
@@ -10,10 +19,22 @@ import re
 import uuid
 from pathlib import Path
 
+import pytest
+
+import local_app.app as app_module
+import run_registry
 from db.application_repository import get_supabase_client, update_application_status, upsert_dice_job
 from local_app.app import app
 
 APP_SOURCE = (Path(__file__).parent.parent / "local_app" / "app.py").read_text(encoding="utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _no_real_worker_subprocess(tmp_path, monkeypatch):
+    monkeypatch.setattr(run_registry, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(app_module, "run_registry", run_registry)
+    monkeypatch.setattr(app_module.subprocess, "Popen", lambda *a, **k: None)
+    monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", "44444444-4444-4444-4444-444444444444")
 
 
 def _client():
@@ -205,7 +226,10 @@ def test_apply_queues_only_selected_jobs():
     try:
         resp = _client().post("/jobs/apply", data={"job_id": [job_selected["id"]]}, follow_redirects=False)
         assert resp.status_code == 302
-        assert "queued=1" in resp.headers["Location"]
+        # Phase 6.2: a successful Apply now redirects to the Run Progress
+        # page (/runs/<id>) instead of /applications?queued=N -- the queue
+        # write itself is unchanged and still verified below.
+        assert "/runs/" in resp.headers["Location"]
 
         sc = get_supabase_client()
         selected_apps = sc.table("applications").select("*").eq("dice_job_id", job_selected["id"]).execute().data
@@ -276,15 +300,33 @@ def test_jobs_routes_never_import_browser_or_worker_execution_code():
     # Scoped to the Jobs selection flow's own route bodies -- NOT the whole
     # file, which legitimately references playwright/the worker CLI
     # elsewhere (browser_check.py's checks, "Resume Application"'s
-    # subprocess launch). Those are pre-existing, out of scope here.
-    forbidden = ("playwright", "dice_browser.worker", "dice_browser.submission", "run_worker", "process_one_application", "sync_playwright")
+    # subprocess launch). jobs() and jobs_review() stay fully DB-only.
+    # jobs_apply() (Phase 6.2) legitimately references "dice_browser.worker"
+    # as a subprocess argv string (see test_jobs_apply_route_launches_worker_
+    # as_a_detached_subprocess_not_in_process below) -- what's still
+    # forbidden for it is importing/driving Playwright, or calling the
+    # worker's own functions in-process instead of via subprocess.
+    forbidden = ("playwright", "sync_playwright")
     for route_fn in ("jobs()", "jobs_review()", "jobs_apply()"):
         body = _route_body(route_fn.rstrip("()")).lower()
         for term in forbidden:
             assert term.lower() not in body, f"{route_fn} must never reference {term!r} -- Jobs selection must stay DB-only"
 
+    for route_fn in ("jobs()", "jobs_review()"):
+        body = _route_body(route_fn.rstrip("()")).lower()
+        for term in ("dice_browser.worker", "dice_browser.submission", "run_worker", "process_one_application"):
+            assert term not in body, f"{route_fn} must never reference {term!r} -- Jobs selection must stay DB-only"
 
-def test_jobs_apply_route_only_calls_enqueue_application_not_a_loop_of_worker_runs():
+
+def test_jobs_apply_route_launches_worker_as_a_detached_subprocess_not_in_process():
+    # Phase 6.2: Apply to Selected Jobs now starts the worker -- but only
+    # ever as a subprocess (matching "Resume Application"'s established
+    # pattern), never by calling run_worker_for_run()/process_one_application()
+    # directly, and never by looping Popen once per job (exactly one
+    # process for the whole bounded run, scoped by --run-id).
     body = _route_body("jobs_apply")
     assert "enqueue_application" in body
-    assert ".Popen(" not in body  # no subprocess spawn -- this route only writes rows, doesn't run anything
+    assert body.lower().count(".popen(") == 1
+    assert "--run-id" in body
+    assert "run_worker_for_run(" not in body
+    assert "process_one_application(" not in body

@@ -346,3 +346,76 @@ def failure_reason(application: dict[str, Any]) -> str:
     if not code:
         return application.get("error_message") or "No reason recorded."
     return FAILURE_REASON_TEXT.get(code, application.get("error_message") or code)
+
+
+# ── Run Progress (Jobs selection -> worker) ───────────────────────────────
+
+
+def _current_step_label(latest_event: dict[str, Any] | None) -> str:
+    if latest_event is None:
+        return "Live Qualification"
+    step = _EVENT_TYPE_TO_STEP.get(latest_event["event_type"])
+    for key, label in _TIMELINE_STEPS:
+        if key == step:
+            return label
+    return latest_event["event_type"]
+
+
+def run_progress(client, run: dict[str, Any]) -> dict[str, Any]:
+    """Shapes one run_registry run for the Run Progress page. Reads
+    real Supabase state for exactly the run's own application_ids --
+    never a broader query -- in the run's original (selection) order."""
+    application_ids: list[str] = run["application_ids"]
+    applications = (
+        client.table("applications").select("*").in_("id", application_ids).execute().data if application_ids else []
+    )
+    apps_by_id = {a["id"]: a for a in applications}
+
+    rows = []
+    for application_id in application_ids:
+        application = apps_by_id.get(application_id)
+        if application is None:
+            continue
+        job = _job_by_id(client, application.get("dice_job_id"))
+        latest_event = _latest_event(client, application_id)
+        open_intervention_id = None
+        if application["status"] == "NEEDS_INPUT":
+            open_rows = (
+                client.table("interventions")
+                .select("id")
+                .eq("application_id", application_id)
+                .eq("status", "OPEN")
+                .limit(1)
+                .execute()
+                .data
+            )
+            open_intervention_id = open_rows[0]["id"] if open_rows else None
+        rows.append(
+            {
+                **application,
+                "job": job,
+                "current_step_label": _current_step_label(latest_event),
+                "open_intervention_id": open_intervention_id,
+            }
+        )
+
+    running = [r for r in rows if r["status"] in _RUNNING_STATUSES]
+    submitted = sum(1 for r in rows if r["status"] == "SUBMITTED")
+    needs_input = sum(1 for r in rows if r["status"] == "NEEDS_INPUT")
+    failed = sum(1 for r in rows if r["status"] in _FAILED_STATUSES)
+    remaining = sum(1 for r in rows if r["status"] == "QUEUED")
+
+    return {
+        "run": run,
+        "rows": rows,
+        "current": running[0] if running else None,
+        "counts": {
+            "selected": len(rows),
+            "processed": submitted + needs_input + failed,
+            "submitted": submitted,
+            "needs_input": needs_input,
+            "failed": failed,
+            "running": len(running),
+            "remaining": remaining,
+        },
+    }

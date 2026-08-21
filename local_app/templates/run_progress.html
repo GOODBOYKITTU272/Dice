@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Run Progress{% endblock %}
+{% block content %}
+{% if progress and progress.run.status in ('QUEUED', 'RUNNING') %}
+<meta http-equiv="refresh" content="5">
+{% endif %}
+
+<p><a href="{{ url_for('applications') }}">&larr; Applications</a></p>
+<h1>Run Progress</h1>
+{% if progress %}
+<p class="subtitle">Run {{ run_id }} — <span class="badge {{ 'blue' if progress.run.status in ('QUEUED','RUNNING') else ('green' if progress.run.status == 'COMPLETE' else '') }}">{{ progress.run.status }}</span></p>
+{% endif %}
+
+{% if error %}<div class="error">{{ error }}</div>
+{% elif not progress %}<div class="error">Run not found.</div>
+{% else %}
+
+<div class="grid grid-5">
+  <div class="card stat"><div class="num">{{ progress.counts.selected }}</div><div class="label">Selected</div></div>
+  <div class="card stat"><div class="num">{{ progress.counts.processed }}</div><div class="label">Processed</div></div>
+  <div class="card stat"><div class="num">{{ progress.counts.submitted }}</div><div class="label">Submitted</div></div>
+  <div class="card stat"><div class="num">{{ progress.counts.needs_input }}</div><div class="label">Needs Input</div></div>
+  <div class="card stat"><div class="num">{{ progress.counts.remaining }}</div><div class="label">Remaining</div></div>
+</div>
+
+<div class="card">
+  <h2>Current job</h2>
+  {% if progress.current %}
+  <p><strong>{{ progress.current.job.title or 'Unknown' }}</strong> — {{ progress.current.job.company_name or '—' }}</p>
+  <p class="muted">Current worker step: {{ progress.current.current_step_label }}</p>
+  {% else %}
+  <p class="muted">No job actively running right now.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>Job</th><th>Company</th><th>Status</th><th>Current Step</th><th>Result</th><th>Action</th></tr>
+    {% for row in progress.rows %}
+    <tr>
+      <td>{{ row.job.title or 'Unknown' }}</td>
+      <td>{{ row.job.company_name or '—' }}</td>
+      <td>
+        <span class="badge {{ 'green' if row.status == 'SUBMITTED' else ('red' if row.status in ('FAILED','FAILED_RETRYABLE') else ('amber' if row.status == 'NEEDS_INPUT' else 'blue')) }}">
+          {{ 'RUNNING' if row.status in ('PROCESSING','SUBMITTING') else row.status }}
+        </span>
+      </td>
+      <td class="muted">{{ row.current_step_label if row.status in ('PROCESSING','SUBMITTING') else '—' }}</td>
+      <td class="muted">
+        {% if row.status == 'SUBMITTED' %}✅ Verified submitted
+        {% elif row.status in ('FAILED','FAILED_RETRYABLE') %}{{ failure_reason(row) }}
+        {% elif row.status == 'NEEDS_INPUT' %}Waiting on your answer
+        {% else %}—{% endif %}
+      </td>
+      <td>
+        <a href="{{ url_for('application_detail_view', application_id=row.id) }}">View Application</a>
+        {% if row.status == 'NEEDS_INPUT' and row.open_intervention_id %}
+        &nbsp;·&nbsp;<a href="{{ url_for('intervention_detail_view', intervention_id=row.open_intervention_id) }}">Answer Question</a>
+        {% endif %}
+        {% if row.status == 'SUBMITTED' %}
+        &nbsp;·&nbsp;<a href="{{ url_for('application_detail_view', application_id=row.id) }}">View Verification</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  {% if progress.run.status in ('QUEUED', 'RUNNING') %}
+  <form method="post" action="{{ url_for('run_stop_view', run_id=run_id) }}">
+    <button class="btn secondary" type="submit">Stop Run</button>
+  </form>
+  <p class="muted" style="font-size:0.8rem; margin-top:0.5rem;">Stops before the next job starts — never interrupts a Submit or verification already in progress. This page refreshes automatically every 5 seconds.</p>
+  {% else %}
+  <p class="muted">Run finished — {{ progress.run.status }}.</p>
+  {% endif %}
+</div>
+
+{% endif %}
+{% endblock %}

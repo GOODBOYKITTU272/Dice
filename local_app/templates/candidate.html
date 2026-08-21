@@ -11,7 +11,7 @@
 {% endif %}
 
 <div class="card">
-  <p class="muted">candidate_id: {{ candidate_id }}</p>
+  <p class="muted">candidate_id: {{ candidate_id or 'not configured' }}</p>
   <table>
     <tr><th>Field</th><th>Value</th><th>Status</th></tr>
     {% for label, value, sensitive in fields %}
