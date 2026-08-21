@@ -6,6 +6,10 @@
 
 {% if error %}<div class="error">{{ error }}</div>{% else %}
 
+{% if just_queued %}
+<div class="banner-success">✅ {{ just_queued }} job{{ '' if just_queued == '1' else 's' }} queued for the worker. Nothing has run yet — process them via the Worker page / CLI.</div>
+{% endif %}
+
 <div class="grid grid-5">
   <div class="card stat"><div class="num">{{ counts.submitted }}</div><div class="label">Submitted</div></div>
   <div class="card stat"><div class="num">{{ counts.needs_input }}</div><div class="label">Needs Input</div></div>

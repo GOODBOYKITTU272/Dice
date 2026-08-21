@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Review &amp; Apply{% endblock %}
+{% block content %}
+<style>
+  .steps { display:flex; align-items:center; gap:0.5rem; margin-bottom:1.25rem; font-size:0.85rem; color:var(--muted); }
+  .steps .step { padding:0.25rem 0.7rem; border-radius:999px; border:1px solid var(--border); }
+  .steps .step.active { color:#93c5fd; border-color:#1d2c4d; background:#151d2e; font-weight:600; }
+</style>
+
+<div class="steps">
+  <span class="step">① Discover Jobs</span>
+  <span>→</span>
+  <span class="step">② Filter &amp; Select</span>
+  <span>→</span>
+  <span class="step active">③ Review &amp; Apply</span>
+</div>
+
+<p><a href="{{ url_for('jobs') }}">&larr; Back to Selection</a></p>
+<h1>Review Selected Jobs</h1>
+<p class="subtitle">One last chance to remove a job before queuing it for the worker. Nothing is applied to yet.</p>
+
+{% if error %}<div class="error">{{ error }}</div>{% else %}
+
+{% if not jobs %}
+<div class="card"><p class="empty">Nothing selected. <a href="{{ url_for('jobs') }}">Go back and select some jobs</a>.</p></div>
+{% else %}
+
+<div class="grid grid-4">
+  <div class="card stat"><div class="num">{{ counts.total }}</div><div class="label">Selected</div></div>
+  <div class="card stat"><div class="num">{{ counts.confirmed }}</div><div class="label">Confirmed C2C</div></div>
+  <div class="card stat"><div class="num">{{ counts.likely }}</div><div class="label">Likely</div></div>
+  <div class="card stat"><div class="num">{{ counts.easy_apply }}</div><div class="label">Easy Apply</div></div>
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>Job Title</th><th>Company</th><th>Location</th><th>Employment Type</th><th>C2C Status</th><th>Easy Apply</th><th>State</th><th></th></tr>
+    {% for job in jobs %}
+    <tr>
+      <td>{{ job.title }}</td>
+      <td>{{ job.company_name or '—' }}</td>
+      <td>{{ job.location or '—' }}</td>
+      <td>{{ job.employment_type or '—' }}</td>
+      <td><span class="badge {{ 'green' if job.c2c_status == 'CONFIRMED' else ('amber' if job.c2c_status == 'LIKELY' else '') }}">{{ job.c2c_status }}</span></td>
+      <td>{{ 'Yes' if job.is_easy_apply else 'No' }}</td>
+      <td><span class="badge blue">{{ job.current_state }}</span></td>
+      <td>
+        <form method="post" action="{{ url_for('jobs_review') }}" style="display:inline;">
+          {% for other in jobs %}
+          {% if other.id != job.id %}
+          <input type="hidden" name="job_id" value="{{ other.id }}">
+          {% endif %}
+          {% endfor %}
+          <button type="submit" class="btn secondary">Remove</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<div class="card">
+  <form method="post" action="{{ url_for('jobs_apply') }}">
+    {% for job in jobs %}
+    <input type="hidden" name="job_id" value="{{ job.id }}">
+    {% endfor %}
+    <button type="submit" class="btn">Apply to Selected Jobs</button>
+    <a class="btn secondary" href="{{ url_for('jobs') }}">Back to Selection</a>
+  </form>
+  <p class="muted" style="font-size:0.8rem; margin-top:0.75rem;">This queues the selected jobs (creates QUEUED application rows) for the existing Phase 6 sequential worker. It does not run any application itself — the worker still processes jobs one at a time, with live requalification, auth checks, NEEDS_INPUT pauses, and verified-submission-only, exactly as it already does.</p>
+</div>
+
+{% endif %}
+{% endif %}
+{% endblock %}

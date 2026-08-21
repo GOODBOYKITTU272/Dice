@@ -147,6 +147,33 @@ def job_detail(client, job_id: str) -> dict[str, Any] | None:
     return {**job, "applications": applications}
 
 
+# Jobs.current_state values a job may be selected for application from. Any
+# other state (CLAIMED -- covers SUBMITTED/NEEDS_INPUT/PROCESSING/FAILED/
+# already-applied, or SKIPPED -- not C2C or not Easy Apply) is not eligible.
+SELECTABLE_STATES = ("NEW", "QUEUED")
+
+
+def jobs_by_ids(client, job_ids: list[str]) -> list[dict[str, Any]]:
+    """Same shape as list_jobs() rows, but scoped to an explicit id list and
+    preserving that list's order -- used to render a job selection back
+    (e.g. the Review & Apply screen) without re-deriving it from filters."""
+    if not job_ids:
+        return []
+    jobs = client.table("dice_jobs").select("*").in_("id", job_ids).execute().data
+    jobs_by_id = {j["id"]: j for j in jobs}
+    applications = client.table("applications").select("id, dice_job_id, status").in_("dice_job_id", job_ids).execute().data
+    apps_by_job = {a["dice_job_id"]: a for a in applications}
+
+    rows = []
+    for job_id in job_ids:
+        job = jobs_by_id.get(job_id)
+        if job is None:
+            continue
+        app = apps_by_job.get(job["id"])
+        rows.append({**job, "application": app, "current_state": _job_current_state(job, app)})
+    return rows
+
+
 # ── Applications ─────────────────────────────────────────────────────────
 
 

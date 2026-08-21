@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from flask import Flask, jsonify, redirect, render_template, request, url_for  # noqa: E402
 
+from db.application_repository import DuplicateApplicationError, enqueue_application  # noqa: E402
 from db.intervention_repository import (  # noqa: E402
     AlreadyResolvedError,
     InterventionNotFoundError,
@@ -38,6 +39,9 @@ app.jinja_env.globals["failure_reason"] = queries.failure_reason
 
 DEFAULT_ROLE = "Software Engineer"
 DEFAULT_MAX_RESULTS = 5
+# The single real candidate this project has used since Phase 6.1 -- no
+# multi-candidate concept exists anywhere in this codebase yet.
+AUTHORIZED_CANDIDATE_ID = "23374e49-9458-4614-ba5a-ae84ccd3b320"
 _RESUME_PATH = str(Path(__file__).resolve().parent.parent / ".runtime" / "resume" / "test_resume.pdf")
 
 
@@ -96,6 +100,48 @@ def job_detail_view(job_id):
     return render_template("job_detail.html", active="jobs", job=job, error=error)
 
 
+@app.route("/jobs/review", methods=["POST"])
+def jobs_review():
+    """Screen 3 of the selection flow. Stateless -- the selected job_id set
+    lives entirely in the submitted form (and is resubmitted whole by each
+    "Remove" button), no server-side selection state anywhere. Read-only:
+    creates no application rows, touches no Dice job."""
+    client, error = _client_or_none()
+    job_ids = [jid for jid in request.form.getlist("job_id") if jid]
+    rows = queries.jobs_by_ids(client, job_ids) if client else []
+    counts = {
+        "total": len(rows),
+        "confirmed": sum(1 for r in rows if r["c2c_status"] == "CONFIRMED"),
+        "likely": sum(1 for r in rows if r["c2c_status"] == "LIKELY"),
+        "easy_apply": sum(1 for r in rows if r["is_easy_apply"]),
+    }
+    return render_template("jobs_review.html", active="jobs", jobs=rows, counts=counts, error=error)
+
+
+@app.route("/jobs/apply", methods=["POST"])
+def jobs_apply():
+    """Queues the selected, still-eligible jobs for the existing Phase 6
+    worker -- enqueue_application() only, the same call every other queued
+    application in this project goes through. Never touches Dice, never
+    runs the worker, never processes more than one job "in parallel"
+    because nothing here processes a job at all, only queues it."""
+    client, error = _client_or_none()
+    job_ids = [jid for jid in request.form.getlist("job_id") if jid]
+    rows = queries.jobs_by_ids(client, job_ids) if client else []
+
+    queued = 0
+    for row in rows:
+        if row["current_state"] not in queries.SELECTABLE_STATES:
+            continue  # re-checked server-side; a stale client selection can't queue an ineligible job
+        try:
+            enqueue_application(AUTHORIZED_CANDIDATE_ID, row["id"])
+            queued += 1
+        except DuplicateApplicationError:
+            continue  # already has an application row -- not a duplicate, a no-op
+
+    return redirect(url_for("applications", queued=queued))
+
+
 @app.route("/api/discover", methods=["POST"])
 def api_discover():
     payload = request.get_json(silent=True) or {}
@@ -122,7 +168,13 @@ def applications():
     if status_filter:
         rows = [r for r in rows if r["status"] == status_filter]
     return render_template(
-        "applications.html", active="applications", rows=rows, counts=data["counts"], status_filter=status_filter, error=error
+        "applications.html",
+        active="applications",
+        rows=rows,
+        counts=data["counts"],
+        status_filter=status_filter,
+        error=error,
+        just_queued=request.args.get("queued"),
     )
 
 
@@ -258,7 +310,7 @@ def candidate_view():
     import os
 
     configured = bool(os.environ.get("APPLYWIZZ_API_BASE_URL"))
-    candidate_id = request.args.get("candidate_id") or "23374e49-9458-4614-ba5a-ae84ccd3b320"
+    candidate_id = request.args.get("candidate_id") or AUTHORIZED_CANDIDATE_ID
     fetch_error = None
     fields = [(label, None, sensitive) for label, _, sensitive in _CANDIDATE_FIELDS]
 
