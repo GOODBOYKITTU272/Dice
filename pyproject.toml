@@ -1,2 +1,17 @@
+[project]
+name = "dicepilot"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "supabase",
+    "python-dotenv",
+    "pytest",
+    "requests",
+    "beautifulsoup4",
+    "flask",
+    "playwright==1.62.0",
+    "jobspy-enhanced-scraper==1.3.7",
+]
+
 [tool.vercel]
 entrypoint = "local_app.app:app"
