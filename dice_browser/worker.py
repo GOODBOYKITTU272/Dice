@@ -51,6 +51,7 @@ import run_registry
 from db.application_repository import (
     add_event,
     claim_next_queued_application,
+    claim_next_queued_application_for_run,
     get_application,
     get_dice_job,
     update_application_status,
@@ -233,6 +234,20 @@ def _gate_and_maybe_submit(
             step="NEXT_OR_REVIEW",
             message="Review reached; awaiting explicit human confirmation before Submit",
         )
+        # Real bug found via live-Supabase bounded-run testing (2026-08-22):
+        # leaving this application at PROCESSING forever meant
+        # claim_next_queued_application()'s own "no other PROCESSING/
+        # SUBMITTING application for this candidate" gate would then
+        # permanently block every later claim for that candidate -- a
+        # multi-job run under REQUIRE_CONFIRMATION could only ever process
+        # its first job. NEEDS_INPUT is the existing, already-modeled
+        # "doesn't block sibling claims" status (see this project's own
+        # claim RPC comment: "does NOT block on APPLICATION_LEVEL
+        # NEEDS_INPUT") -- reused here rather than adding a new status
+        # value and migration. No interventions row is created; a
+        # NEEDS_INPUT application with zero open interventions is exactly
+        # what "awaiting a human's go/no-go on Submit" looks like.
+        update_application_status(application_id, "NEEDS_INPUT")
         return ApplicationRunResult(application_id, dice_job_id, StopReason.AWAITING_SUBMIT_CONFIRMATION, "awaiting human confirmation")
 
     return _submit_with_verification(page, application_id, dice_job_id, canonical_url)
@@ -427,21 +442,6 @@ def run_worker(
     return summary
 
 
-def _claim_specific_application(application_id: str, worker_id: str) -> dict[str, Any] | None:
-    """Non-atomic equivalent of claim_next_queued_application(), scoped to
-    one already-known id instead of a pool query -- acceptable here (no
-    new race introduced) because this project is single-worker V1 by
-    design (see this module's own docstring), and a bounded run is
-    processed by exactly one worker process at a time. Returns None if
-    the application isn't QUEUED anymore (already terminal from a prior
-    run, or otherwise moved on) -- the caller treats that as "nothing to
-    do for this id", never as a reason to re-process or re-submit it."""
-    application = get_application(application_id)
-    if application["status"] != "QUEUED":
-        return None
-    return update_application_status(application_id, "PROCESSING", worker_id=worker_id, started_at=application.get("started_at"))
-
-
 def run_worker_for_run(
     page: Page,
     run_id: str,
@@ -449,12 +449,13 @@ def run_worker_for_run(
     submission_policy: SubmissionPolicy = SubmissionPolicy.REQUIRE_CONFIRMATION,
     resume_path=None,
 ) -> WorkerRunSummary:
-    """Processes exactly the application_ids recorded in run_registry's
-    run -- never a broader DB pool query -- one at a time, in the order
-    selected. This is the critical guarantee behind the Jobs selection UI:
-    "select 5 jobs" can never become "process every queued job", because
-    this loop never asks the database "what's next", only "process this
-    specific id, then that one."
+    """Processes exactly the applications belonging to one bounded run
+    (migration 20260822010000_application_runs.sql) -- claim_next_queued_
+    application_for_run() only ever selects rows where applications.run_id
+    matches, so this loop structurally cannot drift into an unrelated
+    QUEUED application no matter what else exists for the same candidate.
+    This is the guarantee behind the Jobs selection UI: "select 5 jobs"
+    can never become "process every queued job".
 
     Halts immediately (not after run_worker()'s 3-strike circuit breaker)
     on a session-level stop (AUTH_REQUIRED/SECURITY_CHALLENGE) -- every
@@ -462,8 +463,8 @@ def run_worker_for_run(
     can't authenticate, jobs 2-5 will fail identically; no point burning
     through the rest of the batch to find that out job by job.
 
-    Checks run_registry.is_stopped() before claiming each next id, never
-    mid-flight -- a Stop Run click can't interrupt an in-progress
+    Checks run_registry.is_stopped() before claiming each next application,
+    never mid-flight -- a Stop Run click can't interrupt an in-progress
     Submit/verification, only prevent the next one from starting."""
     run = run_registry.get_run(run_id)
     candidate_id = run["candidate_id"]
@@ -471,17 +472,20 @@ def run_worker_for_run(
 
     summary = WorkerRunSummary()
 
-    for application_id in run["application_ids"]:
+    while True:
         if run_registry.is_stopped(run_id):
             summary.halted = True
             summary.halt_reason = "run stopped by operator"
             break
 
-        def claim_fn(aid: str = application_id) -> dict[str, Any] | None:
-            return _claim_specific_application(aid, worker_id)
-
-        result = process_one_application(page, candidate_id, worker_id, submission_policy, resume_path, claim_fn=claim_fn)
+        result = process_one_application(
+            page, candidate_id, worker_id, submission_policy, resume_path,
+            claim_fn=lambda: claim_next_queued_application_for_run(run_id, worker_id),
+        )
         summary.processed.append(result)
+
+        if result.stop_reason == StopReason.NOTHING_QUEUED:
+            break  # every application in this run has been processed
 
         if result.stop_reason in _SESSION_LEVEL_STOPS:
             summary.halted = True

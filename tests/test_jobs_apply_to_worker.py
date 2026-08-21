@@ -18,8 +18,12 @@ TEST_CANDIDATE_ID = "22222222-2222-2222-2222-222222222222"
 
 
 @pytest.fixture(autouse=True)
-def _isolated_runs_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(run_registry, "RUNS_DIR", tmp_path / "runs")
+def _uses_real_run_registry(monkeypatch):
+    # run_registry is Supabase-backed (migration 20260822010000_
+    # application_runs.sql) -- nothing to isolate locally; kept as an
+    # explicit fixture (rather than removed) so this file still fails
+    # loudly and early if app_module.run_registry is ever monkeypatched
+    # to something else by an unrelated change.
     monkeypatch.setattr(app_module, "run_registry", run_registry)
 
 
@@ -62,14 +66,22 @@ def _make_job(title, c2c="LIKELY", easy_apply=True):
 
 
 def _cleanup(*job_ids: str):
+    # Two jobs from one Apply click share one run -- every application
+    # across every given job_id must be deleted before any run_id is
+    # deleted, or a still-referenced sibling application (from a job_id
+    # processed later in this same call) trips the run_id FK.
     sc = get_supabase_client()
+    all_run_ids: set[str] = set()
     for job_id in job_ids:
-        apps = sc.table("applications").select("id").eq("dice_job_id", job_id).execute().data
+        apps = sc.table("applications").select("id, run_id").eq("dice_job_id", job_id).execute().data
+        all_run_ids.update(a["run_id"] for a in apps if a.get("run_id"))
         for a in apps:
             sc.table("interventions").delete().eq("application_id", a["id"]).execute()
             sc.table("application_events").delete().eq("application_id", a["id"]).execute()
             sc.table("applications").delete().eq("id", a["id"]).execute()
         sc.table("dice_jobs").delete().eq("id", job_id).execute()
+    for run_id in all_run_ids:
+        sc.table("application_runs").delete().eq("id", run_id).execute()
 
 
 # 6. candidate ID comes from configuration

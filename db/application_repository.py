@@ -122,6 +122,22 @@ def claim_next_queued_application(candidate_id: str, worker_id: str) -> dict[str
     return rows[0] if rows else None
 
 
+def claim_next_queued_application_for_run(run_id: str, worker_id: str) -> dict[str, Any] | None:
+    """Same atomic-claim guarantee as claim_next_queued_application(), but
+    scoped to one bounded run_id (migration 20260822010000) instead of a
+    whole candidate's queue -- this is what lets the worker process
+    exactly a Jobs-selection batch and structurally never drift into an
+    unrelated QUEUED application, no matter what else exists for the same
+    candidate."""
+    client = get_supabase_client()
+    result = client.rpc(
+        "claim_next_queued_application_for_run",
+        {"p_run_id": run_id, "p_worker_id": worker_id},
+    ).execute()
+    rows = result.data or []
+    return rows[0] if rows else None
+
+
 def get_application(application_id: str) -> dict[str, Any]:
     client = get_supabase_client()
     result = (

@@ -49,7 +49,8 @@
       <td class="muted">
         {% if row.status == 'SUBMITTED' %}✅ Verified submitted
         {% elif row.status in ('FAILED','FAILED_RETRYABLE') %}{{ failure_reason(row) }}
-        {% elif row.status == 'NEEDS_INPUT' %}Waiting on your answer
+        {% elif row.status == 'NEEDS_INPUT' and row.open_intervention_id %}Waiting on your answer
+        {% elif row.status == 'NEEDS_INPUT' %}Awaiting Submit confirmation
         {% else %}—{% endif %}
       </td>
       <td>

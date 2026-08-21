@@ -30,9 +30,10 @@ APP_SOURCE = (Path(__file__).parent.parent / "local_app" / "app.py").read_text(e
 
 
 @pytest.fixture(autouse=True)
-def _no_real_worker_subprocess(tmp_path, monkeypatch):
-    monkeypatch.setattr(run_registry, "RUNS_DIR", tmp_path / "runs")
-    monkeypatch.setattr(app_module, "run_registry", run_registry)
+def _no_real_worker_subprocess(monkeypatch):
+    # run_registry is Supabase-backed (migration 20260822010000) -- no
+    # local state to isolate. What must still never happen from this
+    # file's tests is a real worker process actually starting.
     monkeypatch.setattr(app_module.subprocess, "Popen", lambda *a, **k: None)
     monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", "44444444-4444-4444-4444-444444444444")
 
@@ -55,14 +56,22 @@ def _make_job(title, c2c="LIKELY", easy_apply=True):
 
 
 def _cleanup(*job_ids: str):
+    # Multiple jobs from one Apply click share one run -- every
+    # application across every given job_id must be deleted before any
+    # run_id is deleted, or a still-referenced sibling application trips
+    # the run_id FK.
     sc = get_supabase_client()
+    all_run_ids: set[str] = set()
     for job_id in job_ids:
-        apps = sc.table("applications").select("id").eq("dice_job_id", job_id).execute().data
+        apps = sc.table("applications").select("id, run_id").eq("dice_job_id", job_id).execute().data
+        all_run_ids.update(a["run_id"] for a in apps if a.get("run_id"))
         for a in apps:
             sc.table("interventions").delete().eq("application_id", a["id"]).execute()
             sc.table("application_events").delete().eq("application_id", a["id"]).execute()
             sc.table("applications").delete().eq("id", a["id"]).execute()
         sc.table("dice_jobs").delete().eq("id", job_id).execute()
+    for run_id in all_run_ids:
+        sc.table("application_runs").delete().eq("id", run_id).execute()
 
 
 # ── 1. Jobs route loads ────────────────────────────────────────────────

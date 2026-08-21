@@ -143,6 +143,34 @@ def test_process_one_application_reaches_review_awaits_confirmation(fake_interve
     events = [e for e in app_repo.get_supabase_client().tables["application_events"] if e["application_id"] == app["id"]]
     assert any(e["event_type"] == "awaiting_submit_confirmation" for e in events)
 
+    # Real bug found via live-Supabase bounded-run testing (2026-08-22):
+    # an application awaiting confirmation must not stay PROCESSING
+    # forever -- claim_next_queued_application()'s own "no other
+    # PROCESSING/SUBMITTING application for this candidate" gate would
+    # then permanently block every subsequent claim for that candidate,
+    # so a multi-job run under REQUIRE_CONFIRMATION could only ever
+    # process its first job. NEEDS_INPUT is the existing, already-modeled
+    # "doesn't block sibling claims" status (Phase 1's own claim RPC
+    # comment: "does NOT block on APPLICATION_LEVEL NEEDS_INPUT") -- reused
+    # here rather than adding a new status value/migration.
+    assert app_repo.get_application(app["id"])["status"] == "NEEDS_INPUT"
+
+
+def test_process_one_application_awaiting_confirmation_does_not_block_next_claim_for_same_candidate(
+    fake_intervention_repo, page, monkeypatch
+):
+    app_a = _make_queued_application(dice_job_id="DICE-6-CONFIRM-A")
+    app_b = _make_queued_application(dice_job_id="DICE-6-CONFIRM-B")
+    _patch_happy_path(monkeypatch)
+
+    first = worker.process_one_application(page, CANDIDATE, "test-worker")
+    assert first.application_id == app_a["id"]
+    assert first.stop_reason == worker.StopReason.AWAITING_SUBMIT_CONFIRMATION
+
+    second = worker.process_one_application(page, CANDIDATE, "test-worker")
+    assert second.application_id == app_b["id"]
+    assert second.stop_reason == worker.StopReason.AWAITING_SUBMIT_CONFIRMATION
+
 
 # 3. AUTH_REQUIRED on live re-check stops safely, marks FAILED_RETRYABLE
 def test_process_one_application_auth_required_stops(fake_intervention_repo, page, monkeypatch):

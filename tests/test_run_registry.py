@@ -1,58 +1,91 @@
-"""run_registry.py: the bounded-run identity mechanism. No Supabase
-schema migration is available in this environment (the linked Supabase
-CLI session isn't authorized for this project), so the run's membership
-lives in a local JSON file instead -- consistent with this whole project
-being a single-operator local tool, not a distributed system. This is
-what guarantees "select 5 jobs" can never become "process every queued
-job": the worker only ever iterates the exact application_ids stored
-here, never a DB pool query.
+"""run_registry.py: the bounded-run identity mechanism. Backed by the
+real application_runs table + applications.run_id column (migration
+20260822010000_application_runs.sql), so these are live-Supabase tests
+(matching this project's own stated rule: atomic-claim-adjacent behavior
+"can't be meaningfully faked in-process"). Disposable TEST- prefixed
+dice_jobs/applications, cleaned up per test.
 """
 from __future__ import annotations
 
 import uuid
 
-import pytest
-
+from db.application_repository import enqueue_application, get_supabase_client, upsert_dice_job
 import run_registry
 
-
-@pytest.fixture(autouse=True)
-def _isolated_runs_dir(tmp_path, monkeypatch):
-    monkeypatch.setattr(run_registry, "RUNS_DIR", tmp_path / "runs")
+CANDIDATE = "55555555-5555-5555-5555-555555555555"
 
 
-def test_create_run_persists_exact_application_ids_in_order():
-    ids = [str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())]
-    run = run_registry.create_run(ids, candidate_id="cand-1")
-    assert run["application_ids"] == ids
-    assert run["status"] == "QUEUED"
+def _make_queued_application():
+    dice_job_id = f"TEST-{uuid.uuid4()}"
+    job = upsert_dice_job(
+        {"dice_job_id": dice_job_id, "canonical_url": f"https://dice.com/job/{dice_job_id}", "title": "Run Registry Test Role"}
+    )
+    application = enqueue_application(CANDIDATE, job["id"])
+    return job, application
 
-    fetched = run_registry.get_run(run["id"])
-    assert fetched["application_ids"] == ids
+
+def _cleanup(*job_ids: str, run_ids: list[str] = ()):
+    sc = get_supabase_client()
+    for job_id in job_ids:
+        apps = sc.table("applications").select("id").eq("dice_job_id", job_id).execute().data
+        for a in apps:
+            sc.table("applications").delete().eq("id", a["id"]).execute()
+        sc.table("dice_jobs").delete().eq("id", job_id).execute()
+    for run_id in run_ids:
+        sc.table("application_runs").delete().eq("id", run_id).execute()
+
+
+def test_create_run_persists_and_stamps_application_ids():
+    job_a, app_a = _make_queued_application()
+    job_b, app_b = _make_queued_application()
+    try:
+        run = run_registry.create_run([app_a["id"], app_b["id"]], candidate_id=CANDIDATE)
+        assert run["status"] == "QUEUED"
+        assert set(run["application_ids"]) == {app_a["id"], app_b["id"]}
+
+        sc = get_supabase_client()
+        stamped = sc.table("applications").select("id, run_id").in_("id", [app_a["id"], app_b["id"]]).execute().data
+        assert all(a["run_id"] == run["id"] for a in stamped)
+    finally:
+        _cleanup(job_a["id"], job_b["id"], run_ids=[run["id"]])
 
 
 def test_get_run_raises_for_unknown_id():
+    import pytest
+
     with pytest.raises(run_registry.RunNotFoundError):
         run_registry.get_run(str(uuid.uuid4()))
 
 
 def test_update_run_status_persists():
-    run = run_registry.create_run([str(uuid.uuid4())], candidate_id="cand-1")
-    updated = run_registry.update_run_status(run["id"], "RUNNING")
-    assert updated["status"] == "RUNNING"
-    assert run_registry.get_run(run["id"])["status"] == "RUNNING"
+    job, app = _make_queued_application()
+    run = run_registry.create_run([app["id"]], candidate_id=CANDIDATE)
+    try:
+        updated = run_registry.update_run_status(run["id"], "RUNNING")
+        assert updated["status"] == "RUNNING"
+        assert run_registry.get_run(run["id"])["status"] == "RUNNING"
+    finally:
+        _cleanup(job["id"], run_ids=[run["id"]])
 
 
 def test_is_stopped_false_for_running_run():
-    run = run_registry.create_run([str(uuid.uuid4())], candidate_id="cand-1")
-    run_registry.update_run_status(run["id"], "RUNNING")
-    assert run_registry.is_stopped(run["id"]) is False
+    job, app = _make_queued_application()
+    run = run_registry.create_run([app["id"]], candidate_id=CANDIDATE)
+    try:
+        run_registry.update_run_status(run["id"], "RUNNING")
+        assert run_registry.is_stopped(run["id"]) is False
+    finally:
+        _cleanup(job["id"], run_ids=[run["id"]])
 
 
 def test_is_stopped_true_after_stop():
-    run = run_registry.create_run([str(uuid.uuid4())], candidate_id="cand-1")
-    run_registry.update_run_status(run["id"], "STOPPED")
-    assert run_registry.is_stopped(run["id"]) is True
+    job, app = _make_queued_application()
+    run = run_registry.create_run([app["id"]], candidate_id=CANDIDATE)
+    try:
+        run_registry.update_run_status(run["id"], "STOPPED")
+        assert run_registry.is_stopped(run["id"]) is True
+    finally:
+        _cleanup(job["id"], run_ids=[run["id"]])
 
 
 def test_is_stopped_false_for_unknown_run_id():
@@ -60,9 +93,13 @@ def test_is_stopped_false_for_unknown_run_id():
 
 
 def test_two_runs_do_not_see_each_others_application_ids():
-    ids_a = [str(uuid.uuid4())]
-    ids_b = [str(uuid.uuid4()), str(uuid.uuid4())]
-    run_a = run_registry.create_run(ids_a, candidate_id="cand-1")
-    run_b = run_registry.create_run(ids_b, candidate_id="cand-1")
-    assert run_registry.get_run(run_a["id"])["application_ids"] == ids_a
-    assert run_registry.get_run(run_b["id"])["application_ids"] == ids_b
+    job_a, app_a = _make_queued_application()
+    job_b1, app_b1 = _make_queued_application()
+    job_b2, app_b2 = _make_queued_application()
+    run_a = run_registry.create_run([app_a["id"]], candidate_id=CANDIDATE)
+    run_b = run_registry.create_run([app_b1["id"], app_b2["id"]], candidate_id=CANDIDATE)
+    try:
+        assert run_registry.get_run(run_a["id"])["application_ids"] == [app_a["id"]]
+        assert set(run_registry.get_run(run_b["id"])["application_ids"]) == {app_b1["id"], app_b2["id"]}
+    finally:
+        _cleanup(job_a["id"], job_b1["id"], job_b2["id"], run_ids=[run_a["id"], run_b["id"]])

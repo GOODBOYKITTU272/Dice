@@ -103,7 +103,15 @@ def test_process_one_application_against_real_supabase(live_client, page, monkey
         assert result.stop_reason == worker.StopReason.AWAITING_SUBMIT_CONFIRMATION
 
         application = app_repo.get_application(result.application_id)
-        assert application["status"] == "PROCESSING"
+        # Real bug found via live-Supabase bounded-run testing (2026-08-22,
+        # see dice_browser/worker.py's _gate_and_maybe_submit): staying at
+        # PROCESSING forever would permanently block the claim RPC's "no
+        # other PROCESSING/SUBMITTING application for this candidate" gate
+        # for every later application. Transitions to NEEDS_INPUT instead --
+        # the existing, already-modeled "doesn't block sibling claims"
+        # status -- with no interventions row (nothing to answer, just
+        # awaiting a human's Submit go/no-go).
+        assert application["status"] == "NEEDS_INPUT"
         assert application["worker_id"] == "test-worker-6"
 
         events = (
