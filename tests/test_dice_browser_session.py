@@ -12,7 +12,14 @@ import os
 import pytest
 from playwright.sync_api import sync_playwright
 
-from dice_browser.session import ProfileInUseError, ProfileLock, detect_challenge, is_authenticated
+from dice_browser.models import BrowserState
+from dice_browser.session import (
+    ProfileInUseError,
+    ProfileLock,
+    classify_authentication,
+    detect_challenge,
+    is_authenticated,
+)
 
 
 @pytest.fixture(scope="module")
@@ -142,3 +149,51 @@ def test_detect_challenge_security_check(page):
     from dice_browser.models import ChallengeType
 
     assert detect_challenge(page) == ChallengeType.SECURITY_CHECK
+
+
+# ── Phase 4B.1: tri-state authentication classification ─────────────────
+# is_authenticated() stays a simple bool for existing callers.
+# classify_authentication() is richer: it distinguishes "confirmed logged
+# out" from "can't tell" (neither/both signals present), since the two
+# must never be conflated -- "never guess authenticated = True" applies
+# just as much to silently defaulting an ambiguous page to AUTH_REQUIRED
+# as it would to defaulting it to ACTIVE.
+
+
+def test_classify_authentication_active_on_positive_fixture(page):
+    page.set_content('<html><body><nav><a href="/dashboard/logout">Sign Out</a></nav></body></html>')
+    assert classify_authentication(page) == BrowserState.ACTIVE
+
+
+def test_classify_authentication_auth_required_on_logged_out_fixture(page):
+    page.set_content(
+        """
+        <html><body>
+        <a href="/dashboard/login">Login</a>
+        <input name="email" />
+        </body></html>
+        """
+    )
+    assert classify_authentication(page) == BrowserState.AUTH_REQUIRED
+
+
+def test_classify_authentication_needs_input_when_neither_signal_present(page):
+    # Ambiguous: no login form, no account signal either. Must not be
+    # silently treated as AUTH_REQUIRED (that's a real logged-out-page
+    # claim we haven't earned) or ACTIVE (never guessed).
+    page.set_content("<html><body><p>Some job posting content.</p></body></html>")
+    assert classify_authentication(page) == BrowserState.NEEDS_INPUT
+
+
+def test_classify_authentication_needs_input_when_signals_conflict(page):
+    # Both a login form AND an account-logout link present -- genuinely
+    # conflicting evidence, must escalate rather than pick a side.
+    page.set_content(
+        """
+        <html><body>
+        <a href="/dashboard/login">Login</a>
+        <a href="/dashboard/logout">Sign Out</a>
+        </body></html>
+        """
+    )
+    assert classify_authentication(page) == BrowserState.NEEDS_INPUT

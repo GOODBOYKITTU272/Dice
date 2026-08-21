@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 4B — persistent Dice browser foundation, COMPLETE, committed and pushed)
+Last run: 2026-08-21 (Phase 4B.1 — authenticated session bootstrap, PARTIALLY COMPLETE / DEFERRED — auth bootstrap is now a human/external prerequisite, not a browser-worker responsibility)
 
 ## V1 Delivery Board
 
@@ -14,7 +14,8 @@ Last run: 2026-08-21 (Phase 4B — persistent Dice browser foundation, COMPLETE,
 | Phase 3D — LIKELY Policy | COMPLETE — LIKELY → HUMAN_REVIEW approved |
 | Phase 4A — Playwright Reference Audit | COMPLETE |
 | Phase 4B — Persistent Dice Browser | COMPLETE |
-| Phase 4C — Easy Apply Navigation + Resume | NOT STARTED |
+| Phase 4B.1 — Authenticated Session Bootstrap | PARTIALLY COMPLETE / DEFERRED — human/external prerequisite, does not block Phase 4C |
+| Phase 4C — Easy Apply Navigation + Resume | PLANNED |
 | Phase 4D — Application Question Engine | NOT STARTED |
 | Phase 4E — Candidate Adapter | NOT STARTED |
 | Phase 4F — NEEDS_INPUT / Pause-Resume | NOT STARTED |
@@ -31,11 +32,45 @@ Last run: 2026-08-21 (Phase 4B — persistent Dice browser foundation, COMPLETE,
 
 ## Current Phase
 
-Phase 4B — COMPLETE (persistent Dice browser foundation: `dice_browser/` package — session + navigator, no apply-flow logic)
+Phase 4B.1 — PARTIALLY COMPLETE / DEFERRED (see below). Phase 4C plan approved to be produced, not executed.
 
 ## Next Phase
 
-Phase 4C (Easy Apply navigation + resume upload) — not yet approved. Application execution, question answering, submission, candidate-API integration remain explicitly **not started**.
+Phase 4C (Easy Apply navigation + resume upload) — implementation plan requested, **not yet executed**. Question answering, submission, candidate-API integration remain explicitly **not started**.
+
+## Authentication Bootstrap — PRODUCT DECISION (Phase 4B.1, 2026-08-21)
+
+**Authentication bootstrap is a human/external prerequisite. The browser worker does not own first-time login, and never will.**
+
+Required behavior, locked for all future phases:
+- If an authenticated Dice session already exists in the profile → continue.
+- If the session is logged out → `AUTH_REQUIRED` / `NEEDS_INPUT`.
+- If Dice or Google shows OTP/CAPTCHA/security verification → `NEEDS_INPUT`.
+- Never bypass or automate any of those gates, under any circumstance.
+
+**Why**: Google's own OAuth sign-in actively detects and blocks automation-controlled browsers ("This browser or app may not be secure") — confirmed live, and confirmed to persist even across a real installed Chrome binary (`channel="chrome"`), because the detection keys on the DevTools/automation protocol connection itself, not the browser executable. Defeating that would require hiding the automation signal — stealth/fingerprint work explicitly prohibited by this project's rules regardless of who requests it. A compliant workaround (Option A: one-time login via a genuinely separate, non-Playwright-launched Chrome process pointed at the same profile directory) was investigated and is architecturally sound, but real-world execution kept getting derailed by an unrelated macOS/Chrome quirk (a second `--user-data-dir` launch silently gets absorbed into an already-running Chrome instance instead of starting a fresh process) rather than by anything wrong with the approach itself. Given the time already spent, the product decision is to stop treating this as a blocking dependency of the browser engine and instead treat "getting one authenticated session into the profile" as an operational task separate from building the rest of the system.
+
+## Phase 4B.1 — Authenticated Session Bootstrap (2026-08-21)
+
+**What is proven** (all verified live against real, unauthenticated Dice pages, unaffected by the deferred item below):
+- Persistent browser foundation works — profile survives a full close/relaunch cycle.
+- `AUTH_REQUIRED` detection works, confirmed against real logged-out Dice pages.
+- Security-challenge detection works (offline, synthetic fixtures).
+- Safe known-job navigation works — real jobs opened read-only, matching Phase 3B ground truth.
+- Easy Apply presence inspection works (corrected mid-phase — see Phase 4B's `apply-button-wc` finding).
+- Zero application-initiation requests across every live check this session.
+
+**What is deferred, explicitly, not silently**:
+- A live, positively-verified *authenticated* Dice session in the dedicated profile.
+- Live proof that an authenticated session persists across a Playwright process restart.
+
+Both require a human to complete a real login outside of Playwright's control (see product decision above) — this is an operational/credentials-access task, not an engineering task, and **does not block Phase 4C**, whose code is being written to require authentication as a precondition (`AUTH_REQUIRED`/`NEEDS_INPUT`) rather than to attempt to establish it.
+
+**Durable code additions this session** (tri-state auth classification, TDD): `classify_authentication()` added to `dice_browser/session.py` — distinguishes `ACTIVE` (positive signal, no conflict), `AUTH_REQUIRED` (negative signal, no conflict), and `NEEDS_INPUT` (signals conflict, or neither present — ambiguous, never guessed either way). `dice_browser/navigator.py`'s `open_job()` now uses this instead of the old plain bool, so an ambiguous page correctly returns `NEEDS_INPUT` rather than being silently treated as logged-out. `dice_browser/session_bootstrap.py` (new): a manual, human-operated login-wait tool — launches the persistent profile headed, never touches the page until a local signal file appears (no DOM polling of the live Dice page while a human is mid-login), then inspects once. Supports `channel="chrome"` (a real installed Chrome, not the bundled Chrome-for-Testing build) as a legitimate, documented Playwright option — not a fingerprint/stealth trick.
+
+Tests: 124 baseline → **129 passed, 0 failed, 0 skipped** (5 new: 4 tri-state classification tests, 1 navigator-level ambiguous-auth test).
+
+Decision gate: **DEFERRED, not blocking.** See Phase 4C plan.
 
 ## Phase 4A — Playwright Reference Audit (2026-08-21)
 

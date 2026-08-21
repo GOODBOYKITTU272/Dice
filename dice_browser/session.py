@@ -14,7 +14,7 @@ from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
 
-from dice_browser.models import ChallengeType
+from dice_browser.models import BrowserState, ChallengeType
 
 DEFAULT_PROFILE_ROOT = Path(__file__).resolve().parent.parent / ".runtime" / "browser_profiles"
 
@@ -79,11 +79,22 @@ def _pid_is_alive(pid: int) -> bool:
     return True
 
 
-def launch_persistent_session(profile_id: str, headless: bool = False) -> tuple[ProfileLock, BrowserContext]:
+def launch_persistent_session(
+    profile_id: str, headless: bool = False, channel: str | None = None
+) -> tuple[ProfileLock, BrowserContext]:
     """Launch (or reuse) one persistent Chromium profile. Caller owns the
     returned lock and context and must release/close both when done —
     this function does not manage a context manager scope itself so the
-    caller can drive multiple page navigations in between."""
+    caller can drive multiple page navigations in between.
+
+    channel: Playwright's standard browser-channel option (e.g. "chrome"
+    to use a real installed Google Chrome instead of the bundled
+    Chromium/"Chrome for Testing" build). This is a documented Playwright
+    feature, not a fingerprint/stealth trick — it doesn't hide the
+    automation flag or spoof anything; it just runs a different, real
+    browser binary. Used because Google's own OAuth sign-in actively
+    blocks the bundled Chrome-for-Testing build ("this browser or app may
+    not be secure") — confirmed live during Phase 4B.1."""
     profile_dir = profile_dir_for(profile_id)
     lock = ProfileLock(profile_dir)
     lock.acquire()
@@ -91,6 +102,7 @@ def launch_persistent_session(profile_id: str, headless: bool = False) -> tuple[
     context = playwright.chromium.launch_persistent_context(
         str(profile_dir),
         headless=headless,
+        channel=channel,
     )
     context._dicepilot_playwright = playwright  # keep alive for close(); see close_persistent_session
     return lock, context
@@ -135,22 +147,50 @@ def detect_challenge(page: Page) -> ChallengeType | None:
     return None
 
 
-def is_authenticated(page: Page) -> bool:
-    """True only on a confirmed positive signal. Defaults to False
-    (AUTH_REQUIRED) whenever uncertain — never guessed True."""
+def _has_negative_auth_signal(page: Page) -> bool:
     if page.locator("input[name='email']").count() > 0:
-        return False
+        return True
     if "/dashboard/login" in page.url:
-        return False
+        return True
     if page.locator("a[href*='dashboard/login']").count() > 0:
-        return False
+        return True
     if page.get_by_text("Login", exact=True).count() > 0:
-        return False
+        return True
+    return False
 
-    # Positive signal — see module-level caveat above: not yet live-verified.
+
+def _has_positive_auth_signal(page: Page) -> bool:
+    # See module-level caveat above: not yet live-verified against a real
+    # authenticated session (Phase 4B.1 is what verifies/corrects this).
     if page.locator("a[href*='dashboard/logout']").count() > 0:
         return True
     if page.get_by_text("Sign Out", exact=False).count() > 0:
         return True
-
     return False
+
+
+def is_authenticated(page: Page) -> bool:
+    """Simple bool for callers that just want yes/no. True only on a
+    confirmed positive signal with no conflicting negative one. Use
+    classify_authentication() when the ambiguous/conflicting case needs
+    its own handling instead of collapsing into False."""
+    return classify_authentication(page) == BrowserState.ACTIVE
+
+
+def classify_authentication(page: Page) -> BrowserState:
+    """Tri-state: ACTIVE (positive signal, no conflict), AUTH_REQUIRED
+    (negative signal, no conflict), or NEEDS_INPUT — used both when
+    signals conflict (both present) and when neither is present (can't
+    tell). Those two "ambiguous" cases are deliberately never conflated
+    with a confirmed AUTH_REQUIRED or a guessed ACTIVE — "never guess
+    authenticated = True" extends to never silently assuming logged-out
+    just because nothing else was found."""
+    negative = _has_negative_auth_signal(page)
+    positive = _has_positive_auth_signal(page)
+    if negative and positive:
+        return BrowserState.NEEDS_INPUT
+    if positive:
+        return BrowserState.ACTIVE
+    if negative:
+        return BrowserState.AUTH_REQUIRED
+    return BrowserState.NEEDS_INPUT

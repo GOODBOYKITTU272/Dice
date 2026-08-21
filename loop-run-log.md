@@ -240,3 +240,21 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T20:00:00Z",
+  "phase": "Phase 4B.1 -- Authenticated Session Bootstrap",
+  "task": "Attempted to establish one live authenticated Dice session in the persistent profile. Added classify_authentication() tri-state (ACTIVE/AUTH_REQUIRED/NEEDS_INPUT) to session.py with TDD, wired into navigator.py. Built dice_browser/session_bootstrap.py, a human-operated manual login-wait tool (signal-file based, no DOM polling of the live page).",
+  "iteration": "multiple manual login attempts across this session -- not a code-fix loop, an operational/credentials attempt",
+  "findings": "Google's OAuth sign-in actively blocks Playwright-automation-controlled browsers ('This browser or app may not be secure'), confirmed to persist even with channel=\"chrome\" (a real installed Chrome binary) -- the detection keys on the DevTools/automation protocol connection itself, not the executable. A compliant workaround was identified (Option A: one-time login via a genuinely separate, non-Playwright-launched Chrome process pointed at the same profile dir) but real-world execution was repeatedly derailed by an unrelated macOS/Chrome quirk: a second --user-data-dir launch silently absorbs into an already-running Chrome instance instead of starting a fresh process, so the login kept landing in the user's regular personal Chrome profile instead of the dedicated DicePilot one.",
+  "security_boundary_held": "No stealth/fingerprint-evasion/automation-signal-hiding was attempted at any point, despite repeated blocks. No credentials were requested, typed, or stored by automation. No cookie values were ever read or printed -- diagnosis used cookie NAMES/hosts/httponly-flags/timestamps only.",
+  "product_decision": "Authentication bootstrap is now a human/external prerequisite, not a browser-worker responsibility. AUTH_REQUIRED/NEEDS_INPUT is the required behavior when no session exists; the worker never attempts to establish one. This does not block Phase 4C, which is being planned to require authentication as a precondition.",
+  "tests_run": "129 passed, 0 failed, 0 skipped (124 baseline + 5 new tri-state auth classification tests)",
+  "production_code_changed": true,
+  "files_changed": ["dice_browser/session.py", "dice_browser/navigator.py", "dice_browser/session_bootstrap.py", "tests/test_dice_browser_session.py", "tests/test_dice_browser_navigator.py", "STATE.md"],
+  "human_gate_result": "Phase 4B.1 recorded as PARTIALLY COMPLETE / DEFERRED, not FAILED -- what's proven (persistent profile, AUTH_REQUIRED/challenge detection, safe navigation, Easy Apply inspection, zero application initiation) stands; live authenticated-session proof deferred to a future human-completed bootstrap",
+  "next_action": "Produce Phase 4C implementation plan only (Easy Apply navigation + resume upload) -- do not execute",
+  "outcome": "phase-complete"
+}
+```

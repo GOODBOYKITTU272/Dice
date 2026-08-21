@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from playwright.sync_api import Page
 
 from dice_browser.models import BrowserState, NavigationResult
-from dice_browser.session import detect_challenge, is_authenticated
+from dice_browser.session import classify_authentication, detect_challenge
 
 _ALLOWED_HOST = "www.dice.com"
 _ALLOWED_PATH_PREFIX = "/job-detail/"
@@ -60,22 +60,28 @@ def open_job(page: Page, canonical_url: str) -> NavigationResult:
             evidence=f"security challenge detected: {challenge.value}",
         )
 
-    authenticated = is_authenticated(page)
+    auth_state = classify_authentication(page)
+    authenticated = auth_state == BrowserState.ACTIVE
     easy_apply_visible = _detect_easy_apply(page)
     # Already-applied is inherently a per-account signal — Dice can't show
-    # it to a logged-out visitor, so it's unknown (None), never guessed
-    # False, when we're not authenticated.
+    # it to a logged-out (or ambiguous-state) visitor, so it's unknown
+    # (None), never guessed False, unless we're confirmed authenticated.
     already_applied = _detect_already_applied(page) if authenticated else None
 
+    evidence = (
+        "page loaded and inspected; no security challenge detected"
+        if auth_state != BrowserState.NEEDS_INPUT
+        else "auth signals ambiguous or conflicting — never guessed"
+    )
     return NavigationResult(
         canonical_url=canonical_url,
         page_title=_safe_title(page),
-        browser_state=BrowserState.ACTIVE if authenticated else BrowserState.AUTH_REQUIRED,
+        browser_state=auth_state,
         authenticated=authenticated,
         already_applied=already_applied,
         easy_apply_visible=easy_apply_visible,
         challenge_type=None,
-        evidence="page loaded and inspected; no security challenge detected",
+        evidence=evidence,
     )
 
 

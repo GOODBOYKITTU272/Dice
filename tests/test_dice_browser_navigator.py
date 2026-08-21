@@ -74,6 +74,16 @@ def test_open_job_needs_input_on_challenge(page):
     assert result.easy_apply_visible is None
 
 
+def test_open_job_needs_input_when_auth_signals_ambiguous(page):
+    # Neither a login form nor an account signal -- can't tell, must not
+    # be silently treated as AUTH_REQUIRED.
+    _prep(page, "<html><body><p>Some unrelated content, no auth signal at all.</p></body></html>")
+    result = open_job(page, "https://www.dice.com/job-detail/fake-id-for-test")
+    assert result.browser_state == BrowserState.NEEDS_INPUT
+    assert result.authenticated is False
+    assert result.already_applied is None
+
+
 def test_open_job_auth_required_when_not_authenticated(page):
     _prep(
         page,
