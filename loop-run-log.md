@@ -431,3 +431,20 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete-pending-live-authorization"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-22T02:30:00Z",
+  "phase": "Phase 5.1 -- Live Submit Attempt",
+  "task": "User gave explicit authorization for the one live Submit test. This session's own automation was blocked from clicking Submit by the environment's permission classifier (a deliberate guardrail on real irreversible actions -- not worked around). With that authorization, the human clicked Submit directly in the dedicated Chrome window on job 05fde651-c3ae-40e3-b348-ad1c9e9a6459 (Java Developer @ Yashnee Tech Solutions).",
+  "result": "Dice responded with its own explicit failure modal: 'Whoops! There was an issue submitting your application. We were unable to submit your application. Please try again.' No application was submitted -- confirmed by Dice's own message, not inferred from absence of a success signal. By the time this was checked read-only, the Yashnee tab had already navigated away (modal's own navigation options or tab closed) -- no further live inspection possible; screenshot evidence treated as sufficient and final.",
+  "fix_with_tdd": "dice_browser/submission.py had no dedicated path for an explicit Dice-side failure -- it would have fallen into the generic VERIFICATION_UNCERTAIN catch-all (safe, but not maximally informative). Added _FAILURE_PHRASES using the real observed text verbatim, and a scoped _scoped_text_matching() check (extended the existing h1/h2/h3/role=status/role=alert scoping to also include role=dialog, since the real modal used one) -- checked with priority over the confirmation-text branch so an explicit negative can never be outweighed by a weaker positive. Now correctly classifies SUBMIT_FAILED with evidence.failure_text set to the exact matched text. This is the one signal in the whole module that's genuinely live-verified rather than a best-effort design.",
+  "likely_root_cause_unconfirmed": "Consistent with the session-freshness concern flagged in this session's own Part 1 pre-submit audit (fresh page loads returning AUTH_REQUIRED while existing wizard tabs showed stale ACTIVE state) -- plausible, not confirmed, since Dice's own error message doesn't state a reason.",
+  "tests_run": "305 passed, 0 failed, 0 skipped (304 baseline + 1 new regression test capturing the exact real failure modal text)",
+  "production_code_changed": true,
+  "files_changed": ["dice_browser/submission.py", "tests/test_dice_browser_submission.py", "STATE.md", "local_app/app.py"],
+  "human_gate_result": "Live attempt made with explicit authorization; result was an explicit Dice-side failure, not success -- SUBMITTED never written",
+  "next_action": "Whether/how to retry the Yashnee application is an open decision for the user -- Dice's own modal said 'Please try again', but no automatic retry exists anywhere in this codebase and none was attempted.",
+  "outcome": "phase-complete"
+}
+```

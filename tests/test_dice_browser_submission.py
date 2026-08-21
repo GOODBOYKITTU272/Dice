@@ -5,12 +5,22 @@ workaround already used in test_dice_browser_easy_apply.py). No live Dice
 needed for any of these.
 
 Zero live "Submit clicked -> confirmed success" evidence exists yet as of
-this file's creation -- every fixture below models a plausible shape
-against Dice's established UI conventions (headings, role=status regions,
-the same wizard-URL pattern seen everywhere else in this codebase), not a
-live-verified page. The actual live confirmation shape may differ; that's
-exactly why VERIFIED_SUBMITTED requires strong, scoped evidence and
-everything weaker falls to VERIFICATION_UNCERTAIN rather than a guess.
+this file's creation -- every success-path fixture below models a
+plausible shape against Dice's established UI conventions (headings,
+role=status regions, the same wizard-URL pattern seen everywhere else in
+this codebase), not a live-verified page. The actual live confirmation
+shape may differ; that's exactly why VERIFIED_SUBMITTED requires strong,
+scoped evidence and everything weaker falls to VERIFICATION_UNCERTAIN
+rather than a guess.
+
+The FAILURE fixture (test_explicit_dice_failure_modal_is_submit_failed)
+IS live-verified: a real Submit click on job 05fde651-c3ae-40e3-b348-
+ad1c9e9a6459 (Java Developer @ Yashnee Tech Solutions) on 2026-08-21
+produced exactly this modal -- heading "Whoops! There was an issue
+submitting your application.", body "We were unable to submit your
+application. Please try again.", OK/Go to Search/Return to Job Details
+buttons. No application was submitted; Dice's own explicit message is the
+evidence.
 """
 from __future__ import annotations
 
@@ -76,6 +86,26 @@ def _submit(page, **overrides):
     )
     kwargs.update(overrides)
     return submit_application(**kwargs)
+
+
+# Real live regression (2026-08-21, job 05fde651-c3ae-40e3-b348-ad1c9e9a6459,
+# Java Developer @ Yashnee Tech Solutions): a real Submit click produced
+# Dice's own explicit failure modal verbatim. Must classify SUBMIT_FAILED,
+# not the generic VERIFICATION_UNCERTAIN catch-all -- Dice told us
+# directly what happened, this isn't ambiguous.
+def test_explicit_dice_failure_modal_is_submit_failed(page):
+    onclick = (
+        "document.body.innerHTML += "
+        "'<div role=\"dialog\">"
+        "<h2>Whoops! There was an issue submitting your application.</h2>"
+        "<p>We were unable to submit your application. Please try again.</p>"
+        "<button>OK</button><button>Go to Search</button><button>Return to Job Details</button>"
+        "</div>';"
+    )
+    _load(page, _review_page(submit_onclick=onclick))
+    result = _submit(page, poll_timeout_seconds=1, poll_interval_seconds=0.1)
+    assert result.status == SubmissionStatus.SUBMIT_FAILED
+    assert "issue submitting your application" in result.evidence["failure_text"].lower()
 
 
 # 1. Submit click alone -> NOT enough

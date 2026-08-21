@@ -46,6 +46,19 @@ _CONFIRMATION_PHRASES = (
     "you're all set",
 )
 
+# Live-verified (2026-08-21, job 05fde651-c3ae-40e3-b348-ad1c9e9a6459, Java
+# Developer @ Yashnee Tech Solutions): a real Submit click produced this
+# modal verbatim -- "Whoops! There was an issue submitting your
+# application." / "We were unable to submit your application. Please try
+# again." Unlike the confirmation phrases above, this one is not a guess.
+_FAILURE_PHRASES = (
+    "there was an issue submitting your application",
+    "we were unable to submit your application",
+    "unable to submit your application",
+)
+
+_EVIDENCE_SELECTOR = "h1, h2, h3, [role='status'], [role='alert'], [role='dialog']"
+
 
 @dataclass
 class SubmitPreconditions:
@@ -80,12 +93,12 @@ def _result(
     )
 
 
-def _scoped_confirmation_text(page: Page) -> str | None:
-    """Scoped to heading/status-role elements only -- never a page-wide
-    substring search. A candidate's own free-text answer, a job
-    description, or an unrelated UI string containing the word
-    "submitted" must never false-positive this."""
-    for el in page.locator("h1, h2, h3, [role='status'], [role='alert']").all():
+def _scoped_text_matching(page: Page, phrases: tuple[str, ...]) -> str | None:
+    """Scoped to heading/status/alert/dialog elements only -- never a
+    page-wide substring search. A candidate's own free-text answer, a job
+    description, or an unrelated UI string containing a phrase-like
+    substring must never false-positive this."""
+    for el in page.locator(_EVIDENCE_SELECTOR).all():
         try:
             if not el.is_visible():
                 continue
@@ -93,20 +106,23 @@ def _scoped_confirmation_text(page: Page) -> str | None:
         except Exception:
             continue
         lowered = text.lower()
-        for phrase in _CONFIRMATION_PHRASES:
+        for phrase in phrases:
             if phrase in lowered:
                 return text
     return None
 
 
-def _poll_for_confirmation(page: Page, timeout_seconds: float, interval_seconds: float) -> str | None:
+def _poll_for_evidence(page: Page, timeout_seconds: float, interval_seconds: float) -> tuple[str | None, str | None]:
+    """Returns (confirmation_text, failure_text) -- whichever appears
+    first, or (None, None) if neither shows up within the window."""
     deadline = time.monotonic() + timeout_seconds
     while True:
-        confirmation = _scoped_confirmation_text(page)
-        if confirmation:
-            return confirmation
+        failure = _scoped_text_matching(page, _FAILURE_PHRASES)
+        confirmation = _scoped_text_matching(page, _CONFIRMATION_PHRASES)
+        if failure or confirmation:
+            return confirmation, failure
         if time.monotonic() >= deadline:
-            return None
+            return None, None
         try:
             page.wait_for_timeout(interval_seconds * 1000)
         except Exception:
@@ -190,14 +206,15 @@ def submit_application(
 
     submit_button.first.click()
 
-    confirmation_text = _poll_for_confirmation(page, poll_timeout_seconds, poll_interval_seconds)
-    return _classify_post_submit(page, before_url, confirmation_text, application_id, dice_job_id)
+    confirmation_text, failure_text = _poll_for_evidence(page, poll_timeout_seconds, poll_interval_seconds)
+    return _classify_post_submit(page, before_url, confirmation_text, failure_text, application_id, dice_job_id)
 
 
 def _classify_post_submit(
     page: Page,
     before_url: str,
     confirmation_text: str | None,
+    failure_text: str | None,
     application_id: str | None,
     dice_job_id: str | None,
 ) -> SubmissionResult:
@@ -220,6 +237,21 @@ def _classify_post_submit(
             SubmissionStatus.AUTH_REQUIRED,
             "session no longer authenticated after submit",
             {},
+            application_id,
+            dice_job_id,
+            before_url,
+            after_url,
+        )
+
+    if failure_text:
+        # Live-verified (2026-08-21): Dice's own explicit failure modal.
+        # Checked before the confirmation-text branch on purpose -- an
+        # explicit negative signal must never be outweighed by a weaker
+        # positive one.
+        return _result(
+            SubmissionStatus.SUBMIT_FAILED,
+            "Dice explicitly reported a submission failure",
+            {"failure_text": failure_text},
             application_id,
             dice_job_id,
             before_url,
