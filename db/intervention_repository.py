@@ -230,3 +230,29 @@ def compute_application_readiness(application_id: str) -> ApplicationReadiness:
         return ApplicationReadiness.NEEDS_INPUT if open_rows else ApplicationReadiness.RESUMABLE
 
     return _STATUS_TO_READINESS[status]
+
+
+def get_resolved_answers(application_id: str) -> dict[str, Any]:
+    """question_id -> answer, for every ANSWERED intervention on this
+    application. Used by Phase 6 when resuming a NEEDS_INPUT application:
+    Dice's "Continue Application" restarts the wizard at Step 1 rather
+    than resuming directly at the blocked question (live-verified,
+    2026-08-21), so the resumed run must re-extract questions and refill
+    each already-resolved one by its stable question_id rather than
+    re-asking it."""
+    client = get_supabase_client()
+    rows = (
+        client.table("interventions")
+        .select("*")
+        .eq("application_id", application_id)
+        .eq("status", "ANSWERED")
+        .execute()
+        .data
+        or []
+    )
+    resolved: dict[str, Any] = {}
+    for row in rows:
+        question_id = _question_id_of(row)
+        if question_id is not None:
+            resolved[question_id] = row.get("answer")
+    return resolved

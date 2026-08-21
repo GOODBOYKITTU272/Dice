@@ -39,18 +39,32 @@ def test_submission_module_clicks_exactly_one_submit_button():
 def test_no_next_review_submit_functions_outside_submission_module():
     # Every OTHER module in dice_browser/ must still never define
     # Next/Review/Submit/answer-question functions -- only submission.py
-    # (Phase 5, explicitly authorized and itself boundary-tested) may.
-    # models.py is exempt from the name-substring check specifically --
-    # it's data-only (dataclasses/enums, never an action), and its
-    # SubmissionResult/SubmissionStatus docstrings legitimately reference
-    # submit_application() by name for cross-reference documentation.
-    forbidden = ("click_next", "click_review", "click_submit", "answer_question", "submit_application")
+    # (Phase 5, explicitly authorized and itself boundary-tested) may
+    # DEFINE the Submit click. Exemptions, and why:
+    #   models.py       -- data-only (dataclasses/enums), docstrings
+    #                       legitimately name submit_application() for
+    #                       cross-reference documentation.
+    #   wizard_navigation.py -- Phase 6, defines click_next() (Next only,
+    #                       never Submit/Review) -- itself boundary-
+    #                       tested in test_phase6_boundary.py.
+    #   worker.py       -- Phase 6, orchestrates by CALLING the already-
+    #                       gated submit_application()/click_next(); it
+    #                       never defines a second click-Submit path
+    #                       itself -- verified separately (zero of its
+    #                       own .click() calls) in test_phase6_boundary.py.
+    forbidden = ("click_review", "click_submit", "answer_question")
+    exempt = {"submission.py", "models.py", "wizard_navigation.py", "worker.py"}
     for py_file in DICE_BROWSER_DIR.glob("*.py"):
-        if py_file.name in ("submission.py", "models.py"):
+        if py_file.name in exempt:
             continue
         source = py_file.read_text(encoding="utf-8").lower()
         for name in forbidden:
             assert name not in source, f"found forbidden function name {name!r} in {py_file}"
+        # click_next/submit_application (bare names) are checked here too,
+        # for every file that ISN'T one of the two Phase 6 modules that
+        # legitimately reference them.
+        for name in ("click_next", "submit_application"):
+            assert name not in source, f"found forbidden reference {name!r} in {py_file}"
 
 
 def test_easy_apply_module_never_navigates_past_the_wizard_landing():

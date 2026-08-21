@@ -16,6 +16,8 @@ rows — it never resets or drops schema.
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from db.application_repository import (
     DuplicateApplicationError,
     add_event,
@@ -27,10 +29,14 @@ from db.application_repository import (
     update_application_status,
     upsert_dice_job,
 )
+from db.supabase_client import get_supabase_client
 
 
 def _unique_job_id():
     return f"TEST-{uuid.uuid4()}"
+
+
+_created_job_ids = []
 
 
 def _make_job(**overrides):
@@ -41,7 +47,31 @@ def _make_job(**overrides):
         "title": "Integration Test Role",
     }
     job.update(overrides)
-    return upsert_dice_job(job)
+    created = upsert_dice_job(job)
+    _created_job_ids.append(created["id"])
+    return created
+
+
+def _cleanup(job_id: str):
+    client = get_supabase_client()
+    apps = client.table("applications").select("id").eq("dice_job_id", job_id).execute().data
+    for a in apps:
+        aid = a["id"]
+        for iv in client.table("interventions").select("id").eq("application_id", aid).execute().data:
+            client.table("interventions").delete().eq("id", iv["id"]).execute()
+        for ev in client.table("application_events").select("id").eq("application_id", aid).execute().data:
+            client.table("application_events").delete().eq("id", ev["id"]).execute()
+        client.table("applications").delete().eq("id", aid).execute()
+    client.table("dice_jobs").delete().eq("id", job_id).execute()
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_created_jobs():
+    try:
+        yield
+    finally:
+        while _created_job_ids:
+            _cleanup(_created_job_ids.pop())
 
 
 # 1. Dice job upsert is idempotent.
@@ -53,6 +83,7 @@ def test_dice_job_upsert_is_idempotent(live_client):
         "title": "Integration Test Contract Role",
     }
     first = upsert_dice_job(job)
+    _created_job_ids.append(first["id"])
     second = upsert_dice_job({**job, "title": "Integration Test Contract Role v2"})
     assert first["id"] == second["id"]
 

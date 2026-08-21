@@ -51,7 +51,7 @@ DELIVERY_BOARD = [
     ("Phase 4E — Candidate Adapter", "COMPLETE (offline) — live fetch BLOCKED, APPLYWIZZ_API_BASE_URL/TOKEN not configured"),
     ("Phase 4F — NEEDS_INPUT", "COMPLETE — live-verified NEEDS_INPUT -> resolved -> RESUMABLE, no schema migration"),
     ("Phase 5 — Submission Verification", "LIVE VERIFIED — 2 real Dice applications submitted end to end (jobs 05fde651..., 6695d2fb...)"),
-    ("Phase 6 — Sequential Worker", "NOT STARTED"),
+    ("Phase 6 — Sequential Worker", "BUILT + TESTED — REQUIRE_CONFIRMATION default, AUTHORIZED_AUTONOMOUS architected-not-enabled, one read-only preflight performed, no live worker run yet"),
     ("Phase 7 — 20-Job End-to-End", "NOT STARTED"),
 ]
 
@@ -59,7 +59,7 @@ BROWSER_STATUS = [
     ("Browser Foundation", "COMPLETE"),
     ("Persistent Profile", "VERIFIED"),
     ("Authentication", "VERIFIED — HUMAN + CDP"),  # CDP-attach to a normal, never-quit Chrome -- see STATE.md
-    ("Browser Worker", "NOT RUNNING"),
+    ("Browser Worker", "BUILT + TESTED, NOT YET LIVE-RUN — dice_browser/worker.py, REQUIRE_CONFIRMATION default"),
     ("Easy Apply Entry", "VERIFIED"),
     ("Resume Detection", "VERIFIED"),
     ("Resume Replacement", "VERIFIED"),

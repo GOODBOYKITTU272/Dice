@@ -54,6 +54,10 @@ class ApplicationNotFoundError(RuntimeError):
     pass
 
 
+class DiceJobNotFoundError(RuntimeError):
+    pass
+
+
 def _is_unique_violation(exc: Exception) -> bool:
     return getattr(exc, "code", None) == UNIQUE_VIOLATION
 
@@ -66,6 +70,16 @@ def upsert_dice_job(job: dict[str, Any]) -> dict[str, Any]:
         .upsert(job, on_conflict="dice_job_id")
         .execute()
     )
+    return result.data[0]
+
+
+def get_dice_job(dice_job_id: str) -> dict[str, Any]:
+    """dice_job_id here is dice_jobs.id (the FK applications.dice_job_id
+    points at), not the raw Dice UUID text column."""
+    client = get_supabase_client()
+    result = client.table("dice_jobs").select("*").eq("id", dice_job_id).execute()
+    if not result.data:
+        raise DiceJobNotFoundError(dice_job_id)
     return result.data[0]
 
 
