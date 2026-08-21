@@ -67,6 +67,19 @@ def test_job_detail_and_application_detail_load():
     assert client.get(f"/applications/{REAL_APPLICATION_ID}").status_code == 200
 
 
+def test_get_jobs_apply_does_not_crash_by_falling_through_to_job_detail():
+    # Real bug found live on the Vercel deployment (2026-08-22): Flask
+    # routed GET /jobs/apply to job_detail_view(job_id="apply") -- there
+    # was no GET handler for the literal path /jobs/apply (it's POST-only),
+    # so the router fell back to the dynamic /jobs/<job_id> rule, which
+    # does accept GET. "apply" then hit Supabase as an invalid UUID and
+    # 500'd. /jobs/review is a POST-only literal path too, same exposure.
+    client = _client()
+    for path in ("/jobs/apply", "/jobs/review"):
+        resp = client.get(path)
+        assert resp.status_code != 500, f"GET {path} must not 500 (routing must not fall through to /jobs/<job_id>)"
+
+
 def test_resolve_unknown_intervention_does_not_500():
     client = _client()
     resp = client.post("/interventions/00000000-0000-0000-0000-000000000000/resolve", data={"answer": "Yes"})

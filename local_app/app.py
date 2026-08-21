@@ -99,10 +99,15 @@ def jobs():
     )
 
 
-@app.route("/jobs/<job_id>")
+@app.route("/jobs/<uuid:job_id>")
 def job_detail_view(job_id):
+    # uuid converter (not a plain string) so this can never shadow the
+    # literal, POST-only /jobs/apply and /jobs/review paths -- a GET to
+    # either used to fall through to here with job_id="apply"/"review"
+    # and 500 trying to query Supabase with an invalid UUID (found live
+    # on the Vercel deployment, 2026-08-22).
     client, error = _client_or_none()
-    job = queries.job_detail(client, job_id) if client else None
+    job = queries.job_detail(client, str(job_id)) if client else None
     if job is None and not error:
         error = "Job not found."
     return render_template("job_detail.html", active="jobs", job=job, error=error)
