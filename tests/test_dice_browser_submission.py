@@ -152,6 +152,26 @@ def test_real_dice_success_page_is_verified_submitted(page):
     assert "/wizard/success" in result.after_url
 
 
+# Real live regression (2026-08-21, a DIFFERENT job -- SAP R2R Consultant
+# @ MSYS Inc., 6695d2fb-358c-47f4-a9d8-1b22271732bd): a second real
+# submission produced the same success shape but with a different
+# celebratory prefix -- "Fantastic! Your application is on its way!"
+# rather than "Hooray!". Confirms Dice rotates the exclamation but keeps
+# the core phrase stable, which is exactly why the match is scoped to
+# that stable substring rather than the full sentence.
+def test_real_dice_success_page_alternate_wording_is_verified_submitted(page):
+    onclick = (
+        "history.replaceState({}, '', '/job-applications/TESTJOB123/wizard/success');"
+        "document.title = 'Application Success | Dice.com';"
+        "document.body.innerHTML = '<h2>Fantastic! Your application is on its way!</h2>"
+        "<p>You can find the job listing for this role in your Applied Jobs.</p>';"
+    )
+    _load(page, _review_page(submit_onclick=onclick))
+    result = _submit(page, poll_timeout_seconds=2, poll_interval_seconds=0.2)
+    assert result.status == SubmissionStatus.VERIFIED_SUBMITTED
+    assert "on its way" in result.evidence["confirmation_text"].lower()
+
+
 # 1. Submit click alone -> NOT enough
 def test_submit_click_alone_is_not_enough(page):
     _load(page, _review_page(submit_onclick=""))

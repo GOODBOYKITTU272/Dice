@@ -466,3 +466,19 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-22T03:30:00Z",
+  "phase": "Phase 5.3 -- Second Real Submission, Confirmation-Wording Variance",
+  "task": "User submitted a second, independent real application (job 6695d2fb-358c-47f4-a9d8-1b22271732bd, SAP R2R Consultant @ MSYS Inc.) via the same human-click flow as the first. Verified read-only against the real live success page using the actual classifier functions.",
+  "result": "Dice's success page used a different celebratory prefix -- 'Fantastic! Your application is on its way!' instead of 'Hooray!' -- while keeping the core phrase stable. _scoped_text_matching and _has_left_wizard both correctly matched with ZERO code changes needed, confirming the scoped-substring design from the first submission generalizes rather than being overfit to one exact string.",
+  "regression_added": "test_real_dice_success_page_alternate_wording_is_verified_submitted, capturing this second real wording verbatim.",
+  "tests_run": "312 passed, 0 failed, 0 skipped (311 baseline + 1 new)",
+  "production_code_changed": false,
+  "files_changed": ["tests/test_dice_browser_submission.py", "STATE.md", "local_app/app.py"],
+  "human_gate_result": "Second genuine live success, human-clicked throughout -- no automation workaround",
+  "next_action": "Same as before: Phase 6 (sequential worker) and wiring the four proven-but-unconnected pieces (Candidate Adapter, Question Engine, Intervention, Submission) together are next, not yet started.",
+  "outcome": "phase-complete"
+}
+```

@@ -50,7 +50,7 @@ DELIVERY_BOARD = [
     ("Phase 4D — Question Engine", "EXTRACTION FOUNDATION COMPLETE — RADIO/TEXTAREA live-observed + offline-replay verified; select/date/checkbox/multi-select not yet observed"),
     ("Phase 4E — Candidate Adapter", "COMPLETE (offline) — live fetch BLOCKED, APPLYWIZZ_API_BASE_URL/TOKEN not configured"),
     ("Phase 4F — NEEDS_INPUT", "COMPLETE — live-verified NEEDS_INPUT -> resolved -> RESUMABLE, no schema migration"),
-    ("Phase 5 — Submission Verification", "LIVE VERIFIED — real Dice application submitted end to end (job 05fde651...)"),
+    ("Phase 5 — Submission Verification", "LIVE VERIFIED — 2 real Dice applications submitted end to end (jobs 05fde651..., 6695d2fb...)"),
     ("Phase 6 — Sequential Worker", "NOT STARTED"),
     ("Phase 7 — 20-Job End-to-End", "NOT STARTED"),
 ]
@@ -84,7 +84,7 @@ BROWSER_STATUS = [
     ("Auto-answering", "NOT BUILT"),
     ("Submit control", "IMPLEMENTED"),
     ("Submission verification", "LIVE VERIFIED — both SUBMIT_FAILED and VERIFIED_SUBMITTED proven against real Dice evidence"),
-    ("Live submission success (SUBMITTED)", "LIVE VERIFIED — job 05fde651... genuinely submitted"),
+    ("Live submission success (SUBMITTED)", "LIVE VERIFIED — 2 jobs genuinely submitted, 2 different confirmation wordings"),
 ]
 
 
