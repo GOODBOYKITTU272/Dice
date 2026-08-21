@@ -1,6 +1,6 @@
 # Loop State — ApplyWizz DicePilot
 
-Last run: 2026-08-21 (Phase 4B.1 — authenticated session bootstrap, PARTIALLY COMPLETE / DEFERRED — auth bootstrap is now a human/external prerequisite, not a browser-worker responsibility)
+Last run: 2026-08-21 (Phase 4C — Easy Apply entry + resume upload, IMPLEMENTED — LIVE VALIDATION PENDING on the deferred Phase 4B.1 auth prerequisite)
 
 ## V1 Delivery Board
 
@@ -15,7 +15,7 @@ Last run: 2026-08-21 (Phase 4B.1 — authenticated session bootstrap, PARTIALLY 
 | Phase 4A — Playwright Reference Audit | COMPLETE |
 | Phase 4B — Persistent Dice Browser | COMPLETE |
 | Phase 4B.1 — Authenticated Session Bootstrap | PARTIALLY COMPLETE / DEFERRED — human/external prerequisite, does not block Phase 4C |
-| Phase 4C — Easy Apply Navigation + Resume | PLANNED |
+| Phase 4C — Easy Apply Navigation + Resume | IMPLEMENTED — LIVE VALIDATION PENDING |
 | Phase 4D — Application Question Engine | NOT STARTED |
 | Phase 4E — Candidate Adapter | NOT STARTED |
 | Phase 4F — NEEDS_INPUT / Pause-Resume | NOT STARTED |
@@ -32,11 +32,27 @@ Last run: 2026-08-21 (Phase 4B.1 — authenticated session bootstrap, PARTIALLY 
 
 ## Current Phase
 
-Phase 4B.1 — PARTIALLY COMPLETE / DEFERRED (see below). Phase 4C plan approved to be produced, not executed.
+Phase 4C — IMPLEMENTED, **LIVE VALIDATION PENDING** on the deferred Phase 4B.1 auth prerequisite (see below).
 
 ## Next Phase
 
-Phase 4C (Easy Apply navigation + resume upload) — implementation plan requested, **not yet executed**. Question answering, submission, candidate-API integration remain explicitly **not started**.
+Not yet approved. Question answering (Phase 4D), submission verification (Phase 5), candidate-API integration (Phase 4E) remain explicitly **not started**. Before any of them: complete the Phase 4B.1 human auth bootstrap and run Phase 4C's live validation, so Phase 4D isn't designed against untested assumptions about the Easy Apply/resume DOM.
+
+## Phase 4C — Easy Apply Entry + Resume Upload (2026-08-21)
+
+**Scope**: Easy Apply precondition gate, opening the wizard, resume detection/upload. Nothing past that — no question-answering or Next/Review/Submit module exists anywhere in this repo (verified by a dedicated structural test, not just by omission).
+
+**`dice_browser/easy_apply.py`** (new): `open_easy_apply(page, nav_result)` refuses before any click unless all three preconditions hold — `authenticated is True`, `already_applied is False` (not `True`, not `None`), `easy_apply_visible is True`. `already_applied=None` maps to `UNKNOWN_APPLIED_STATE`, never assumed safe. Re-verifies the live apply link's href at click time (not just trusting the possibly-stale `nav_result` flag) — rejects a stale/non-wizard link even if `nav_result.easy_apply_visible` said otherwise. Requires **both** a URL match (`job-applications` + `wizard` in the resulting URL) **and** a DOM landmark before reporting `OPENED` — a bare URL match with no corroborating content is deliberately not trusted alone. This is the only module in the codebase permitted to navigate into `/job-applications/...`; discovery code (`dice/search.py`, `dice/job_parser.py`, `dice/discovery.py`, `dice_browser/navigator.py`) remains unmodified and still forbidden from that path.
+
+**`dice_browser/resume.py`** (new): `detect_existing_resume()` returns `True`/`False`/`None` (unknown, never guessed). `upload_resume()` checks the configured file exists *before* touching the page at all (`RESUME_FILE_MISSING`), clicks "Replace" only when an existing resume is positively detected, uses `set_input_files()`, and requires positive DOM evidence (uploaded filename or an upload-complete signal) before reporting success — never trusts "no exception was thrown." Resume path: `DICEPILOT_TEST_RESUME_PATH` env var, defaulting to `.runtime/resume/test_resume.pdf` — outside git entirely, same protection as the browser profile.
+
+**Known limitation, not glossed over**: the exact DOM selectors for "wizard opened" and "upload succeeded" are placeholders pending live-DOM confirmation — same caveat pattern as `apply-button-wc` in Phase 4B, which turned out to be stale. They're written conservatively (requiring corroborating evidence, never a bare click-succeeded assumption), so a wrong guess fails toward `CLICK_FAILED`/`UPLOAD_FAILED`, never a false positive.
+
+**Tests**: 129 baseline → **153 passed, 0 failed, 0 skipped** (24 new: 9 `test_dice_browser_easy_apply.py`, 10 `test_dice_browser_resume.py`, 5 `test_dice_browser_phase4c_boundary.py` — structural proof no question/Next/Review/Submit code exists anywhere).
+
+**Live validation**: checked once (per this phase's explicit policy — no retry) whether an authenticated session already exists in the persistent profile. It doesn't — `classify_authentication()` returned `AUTH_REQUIRED`. Per the Phase 4B.1 product decision, this is not something Phase 4C's code attempts to fix; live validation of the Easy Apply open and resume upload is **BLOCKED BY AUTH PREREQUISITE**, not attempted, not faked.
+
+Decision gate: **PHASE 4C IMPLEMENTATION: PASS. PHASE 4C LIVE VALIDATION: BLOCKED** (auth prerequisite, not a code defect).
 
 ## Authentication Bootstrap — PRODUCT DECISION (Phase 4B.1, 2026-08-21)
 

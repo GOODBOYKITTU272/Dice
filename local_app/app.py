@@ -38,7 +38,8 @@ DELIVERY_BOARD = [
     ("Phase 3D — LIKELY Policy", "COMPLETE"),
     ("Phase 4A — Reference Audit", "COMPLETE"),
     ("Phase 4B — Persistent Dice Browser", "COMPLETE"),
-    ("Phase 4C — Easy Apply + Resume", "NOT STARTED"),
+    ("Phase 4B.1 — Authenticated Session Bootstrap", "DEFERRED"),
+    ("Phase 4C — Easy Apply + Resume", "IMPLEMENTED — LIVE VALIDATION PENDING"),
     ("Phase 4D — Question Engine", "NOT STARTED"),
     ("Phase 4E — Candidate Adapter", "NOT STARTED"),
     ("Phase 4F — NEEDS_INPUT", "NOT STARTED"),
@@ -50,10 +51,10 @@ DELIVERY_BOARD = [
 BROWSER_STATUS = [
     ("Browser Foundation", "COMPLETE"),
     ("Persistent Profile", "VERIFIED"),
-    ("Authentication", "AUTH REQUIRED"),  # no Dice credentials exist anywhere in this project yet
+    ("Authentication", "HUMAN PREREQUISITE"),  # Phase 4B.1: deferred, not a browser-worker responsibility
     ("Browser Worker", "NOT RUNNING"),
-    ("Easy Apply execution", "NOT ENABLED"),
-    ("Resume upload", "NOT BUILT"),
+    ("Easy Apply Entry", "BUILT — LIVE VERIFICATION PENDING"),
+    ("Resume Upload", "BUILT — LIVE VERIFICATION PENDING"),
     ("Application questions", "NOT BUILT"),
     ("Submission", "NOT BUILT"),
 ]

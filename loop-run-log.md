@@ -258,3 +258,21 @@ Append one entry per Claude Code session that does DicePilot work. Prune entries
   "outcome": "phase-complete"
 }
 ```
+
+```json
+{
+  "run_id": "2026-08-21T21:00:00Z",
+  "phase": "Phase 4C -- Easy Apply Entry + Resume Upload",
+  "task": "TDD implementation of dice_browser/easy_apply.py (three-precondition gate: authenticated, already_applied is False (not None/True), easy_apply_visible; re-verifies the live apply link at click time; requires URL+DOM evidence together before reporting OPENED) and dice_browser/resume.py (existing-resume TRUE/FALSE/None detection, Replace-then-upload, positive-evidence-required success). No question-answering or Next/Review/Submit code exists -- verified by a dedicated structural test, not just by omission.",
+  "iteration": "1 of 3 loop-budget attempts used",
+  "files_changed": ["dice_browser/easy_apply.py", "dice_browser/resume.py", "dice_browser/models.py", "tests/test_dice_browser_easy_apply.py", "tests/test_dice_browser_resume.py", "tests/test_dice_browser_phase4c_boundary.py", "tests/fixtures/dummy_test_resume.txt", "local_app/app.py", "STATE.md"],
+  "tests_run": "153 passed, 0 failed, 0 skipped (129 baseline + 24 new)",
+  "live_validation": "Checked ONCE (per explicit no-retry policy) whether an authenticated session already exists in the persistent profile -- it does not (classify_authentication() = AUTH_REQUIRED). Live validation of Easy Apply open + resume upload is BLOCKED BY AUTH PREREQUISITE, not attempted further, not faked as passing.",
+  "auth_debugging_reopened": "NO -- no login attempt, no Google OAuth automation, no stealth/fingerprint work this run",
+  "production_code_changed": true,
+  "local_ui": "Browser status board updated to reflect reality: Authentication=HUMAN PREREQUISITE, Easy Apply Entry/Resume Upload=BUILT -- LIVE VERIFICATION PENDING (not COMPLETE, per explicit instruction not to claim that from unit tests alone)",
+  "human_gate_result": "Phase 4C recorded as IMPLEMENTED / LIVE VALIDATION PENDING, not COMPLETE -- offline implementation and tests are done; the live end-to-end proof waits on the Phase 4B.1 human auth bootstrap",
+  "next_action": "Decide whether Phase 4D can be planned offline without pretending end-to-end validation exists, or whether to prioritize completing the Phase 4B.1 human auth bootstrap first",
+  "outcome": "phase-complete"
+}
+```

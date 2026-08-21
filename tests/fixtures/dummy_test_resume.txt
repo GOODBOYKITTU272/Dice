@@ -1,0 +1,1 @@
+This is a dummy test-only resume file, not real personal data. Used exclusively by Phase 4C's offline test suite.
