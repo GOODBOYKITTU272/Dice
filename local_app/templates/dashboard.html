@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+<p class="subtitle">What DicePilot is doing right now, and whether anything needs you.</p>
+
+{% if error %}<div class="error">{{ error }}</div>{% else %}
+
+<div class="grid grid-5">
+  <div class="card stat"><div class="num">{{ summary.counts.submitted }}</div><div class="label">Submitted</div></div>
+  <div class="card stat"><div class="num">{{ summary.counts.needs_input }}</div><div class="label">Needs Input</div></div>
+  <div class="card stat"><div class="num">{{ summary.counts.failed }}</div><div class="label">Failed</div></div>
+  <div class="card stat"><div class="num">{{ summary.counts.running }}</div><div class="label">Running</div></div>
+  <div class="card stat"><div class="num">{{ summary.counts.queued }}</div><div class="label">Queued Jobs</div></div>
+</div>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2>Worker status</h2>
+    <p><span class="badge {{ 'green' if summary.worker_status == 'RUNNING' else 'blue' }}">{{ summary.worker_status }}</span></p>
+    {% if summary.current_application %}
+    <p>Current job: <a href="{{ url_for('application_detail_view', application_id=summary.current_application.id) }}">{{ summary.current_job.title or 'Unknown' }} @ {{ summary.current_job.company_name or '—' }}</a></p>
+    {% else %}
+    <p class="muted">No application currently running.</p>
+    {% endif %}
+  </div>
+  <div class="card">
+    <h2>Last application result</h2>
+    {% if summary.last_result %}
+    <p><a href="{{ url_for('application_detail_view', application_id=summary.last_result.id) }}">{{ summary.last_result_job.title or 'Unknown' }} @ {{ summary.last_result_job.company_name or '—' }}</a></p>
+    <p><span class="badge {{ 'green' if summary.last_result.status == 'SUBMITTED' else 'red' }}">{{ summary.last_result.status }}</span></p>
+    {% if summary.last_result.submitted_at %}<p class="muted">Submitted at {{ summary.last_result.submitted_at }}</p>{% endif %}
+    {% else %}
+    <p class="muted">No finished applications yet.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Latest events</h2>
+  {% if summary.latest_events %}
+  <table>
+    <tr><th>Time</th><th>Job</th><th>Event</th><th>Details</th></tr>
+    {% for e in summary.latest_events %}
+    <tr>
+      <td class="muted">{{ e.created_at }}</td>
+      <td>{{ e._job.title or '—' }}</td>
+      <td>{{ e.event_type }}</td>
+      <td class="muted">{{ e.message or '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No events recorded yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <a class="btn" href="{{ url_for('worker_view') }}">Run Worker</a>
+  <a class="btn secondary" href="{{ url_for('applications') }}">View Applications</a>
+  <a class="btn secondary" href="{{ url_for('interventions_view') }}">View Interventions</a>
+</div>
+
+{% endif %}
+{% endblock %}

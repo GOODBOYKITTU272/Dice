@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Events{% endblock %}
+{% block content %}
+<h1>Events</h1>
+<p class="subtitle">All application events and worker activity — the audit trail.</p>
+
+<form class="filters" method="get">
+  <select name="event_type" onchange="this.form.submit()">
+    <option value="">All Event Types</option>
+    {% for t in event_types %}
+    <option value="{{ t }}" {{ 'selected' if filters.event_type == t }}>{{ t }}</option>
+    {% endfor %}
+  </select>
+  <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.82rem; color:var(--muted);">
+    <input type="checkbox" name="failures_only" value="1" {{ 'checked' if filters.failures_only }} onchange="this.form.submit()"> Failures only
+  </label>
+  <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.82rem; color:var(--muted);">
+    <input type="checkbox" name="submissions_only" value="1" {{ 'checked' if filters.submissions_only }} onchange="this.form.submit()"> Submissions only
+  </label>
+  <button class="btn secondary" type="submit">Filter</button>
+</form>
+
+<div class="card">
+  <table>
+    <tr><th>Time</th><th>Application</th><th>Event</th><th>Details</th></tr>
+    {% for e in events %}
+    <tr>
+      <td class="muted">{{ e.created_at }}</td>
+      <td><a href="{{ url_for('application_detail_view', application_id=e.application_id) }}">{{ e._job.title or e.application_id[:8] ~ '…' }}</a></td>
+      <td>{{ e.event_type }}</td>
+      <td class="muted">{{ e.message or '' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="empty">No events match this filter.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

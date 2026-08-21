@@ -428,7 +428,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
             "by itself."
         ),
     )
-    parser.add_argument("--candidate-id", required=True, help="DicePilot candidate_id to process applications for")
+    parser.add_argument("--candidate-id", default=None, help="DicePilot candidate_id to process applications for (required unless --resume-application-id is given)")
+    parser.add_argument("--resume-application-id", default=None, help="Resume one specific NEEDS_INPUT application (calls resume_needs_input_application instead of the normal claim loop)")
     parser.add_argument("--cdp-url", default="http://127.0.0.1:9333", help="CDP endpoint of the already-running dedicated Chrome")
     parser.add_argument("--max-applications", type=int, default=1, help="Maximum applications to process this run (default 1)")
     parser.add_argument("--resume-path", default=None, help="Path to the resume file to upload if none is on file")
@@ -444,6 +445,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
 
+    if not args.resume_application_id and not args.candidate_id:
+        print("error: --candidate-id is required unless --resume-application-id is given")
+        return 2
+
     from playwright.sync_api import sync_playwright
 
     worker_id = f"worker-{uuid.uuid4()}"
@@ -452,19 +457,29 @@ def main(argv: list[str] | None = None) -> int:
         ctx = browser.contexts[0]
         page = ctx.new_page()
 
-        summary = run_worker(
-            page,
-            candidate_id=args.candidate_id,
-            worker_id=worker_id,
-            max_applications=args.max_applications,
-            submission_policy=SubmissionPolicy(args.submission_policy),
-            resume_path=args.resume_path,
-        )
-
-        for result in summary.processed:
+        if args.resume_application_id:
+            result = resume_needs_input_application(
+                page,
+                args.resume_application_id,
+                worker_id,
+                submission_policy=SubmissionPolicy(args.submission_policy),
+                resume_path=args.resume_path,
+            )
             print(f"{result.application_id or '-'}: {result.stop_reason.value} -- {result.detail}")
-        if summary.halted:
-            print(f"HALTED: {summary.halt_reason}")
+        else:
+            summary = run_worker(
+                page,
+                candidate_id=args.candidate_id,
+                worker_id=worker_id,
+                max_applications=args.max_applications,
+                submission_policy=SubmissionPolicy(args.submission_policy),
+                resume_path=args.resume_path,
+            )
+
+            for result in summary.processed:
+                print(f"{result.application_id or '-'}: {result.stop_reason.value} -- {result.detail}")
+            if summary.halted:
+                print(f"HALTED: {summary.halt_reason}")
 
         browser.close()
 

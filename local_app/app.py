@@ -1,17 +1,20 @@
-"""DicePilot Phase 2 local operator UI.
+"""DicePilot local operator UI.
 
-Deliberately not a copy of the old Indeed app.py — new, small, and scoped
-to exactly what Phase 2 needs: trigger discovery, show results. Runs
+Server-rendered Flask + Jinja, matching the existing project convention
+(no build step, no second frontend truth store) -- every page reads
+directly from the same Supabase project the worker writes to. Runs
 locally only; nothing here is meant to be deployed.
 
-Discovery runs synchronously in the request (a handful of HTTP calls for
-3-5 jobs takes a few seconds) — Phase 1's TRD warning about not running
-long-lived browser workers inside Flask request threads doesn't apply
-here, since there's no persistent browser and no long-lived session; this
-is a short-lived HTTP fetch, not the Dice application worker.
+Routes never drive Playwright directly (Phase 1's TRD warning about not
+running long-lived browser workers inside Flask request threads) --
+browser_check.py's checks are short-lived, read-only inspections of an
+already-open CDP connection, and "Resume Application" launches the real
+worker CLI as a detached subprocess rather than importing and running it
+in-process.
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,148 +29,67 @@ from db.intervention_repository import (  # noqa: E402
     resolve_question_intervention,
 )
 from db.supabase_client import get_supabase_client  # noqa: E402
+from dice.candidate_adapter import fetch_candidate  # noqa: E402
 from dice.discovery import run_discovery  # noqa: E402
+from local_app import browser_check, queries  # noqa: E402
 
 app = Flask(__name__)
+app.jinja_env.globals["failure_reason"] = queries.failure_reason
 
 DEFAULT_ROLE = "Software Engineer"
 DEFAULT_MAX_RESULTS = 5
+_RESUME_PATH = str(Path(__file__).resolve().parent.parent / ".runtime" / "resume" / "test_resume.pdf")
 
-# Static status boards (Phase 4B) — recorded verification results, not a
-# live worker poll. No worker/browser-control process exists yet to poll;
-# see STATE.md for what each status reflects and when it was last verified.
-DELIVERY_BOARD = [
-    ("Phase 1 — Database/Foundation", "COMPLETE"),
-    ("Phase 2 — Discovery/Qualification", "COMPLETE"),
-    ("Phase 3A — Safe JobSpy Integration", "COMPLETE"),
-    ("Phase 3B — Qualification Validation", "COMPLETE"),
-    ("Phase 3C — C2C Correctness", "COMPLETE"),
-    ("Phase 3D — LIKELY Policy", "COMPLETE"),
-    ("Phase 4A — Reference Audit", "COMPLETE"),
-    ("Phase 4B — Persistent Dice Browser", "COMPLETE"),
-    ("Phase 4B.1 — Authenticated Session Bootstrap", "COMPLETE"),
-    ("Phase 4C — Easy Apply + Resume", "COMPLETE"),
-    ("Phase 4D — Question Engine", "EXTRACTION FOUNDATION COMPLETE — RADIO/TEXTAREA live-observed + offline-replay verified; select/date/checkbox/multi-select not yet observed"),
-    ("Phase 4E — Candidate Adapter", "COMPLETE (offline) — live fetch BLOCKED, APPLYWIZZ_API_BASE_URL/TOKEN not configured"),
-    ("Phase 4F — NEEDS_INPUT", "COMPLETE — live-verified NEEDS_INPUT -> resolved -> RESUMABLE, no schema migration"),
-    ("Phase 5 — Submission Verification", "LIVE VERIFIED — 2 real Dice applications submitted end to end (jobs 05fde651..., 6695d2fb...)"),
-    ("Phase 6 — Sequential Worker", "LIVE VERIFIED, END TO END — first worker-driven submission (job 4f5a17f3..., Cynet Systems), claim through Supabase-persisted SUBMITTED"),
-    ("Phase 7 — 20-Job End-to-End", "NOT STARTED"),
-]
 
-BROWSER_STATUS = [
-    ("Browser Foundation", "COMPLETE"),
-    ("Persistent Profile", "VERIFIED"),
-    ("Authentication", "VERIFIED — HUMAN + CDP"),  # CDP-attach to a normal, never-quit Chrome -- see STATE.md
-    ("Browser Worker", "LIVE VERIFIED — dice_browser/worker.py drove one real application end to end to SUBMITTED"),
-    ("Easy Apply Entry", "VERIFIED"),
-    ("Resume Detection", "VERIFIED"),
-    ("Resume Replacement", "VERIFIED"),
-    ("Resume Upload", "VERIFIED"),
-    ("No-question branch (NO_QUESTIONS_PRESENT)", "LIVE VERIFIED"),
-    ("Review-screen detection", "LIVE VERIFIED"),
-    ("Radiogroup extraction", "LIVE OBSERVED + OFFLINE REPLAY VERIFIED"),
-    ("Textarea extraction", "LIVE OBSERVED + OFFLINE REPLAY VERIFIED"),
-    ("NEEDS_INPUT classification", "VERIFIED"),
-    ("Select", "NOT LIVE VERIFIED"),
-    ("Checkbox question", "NOT LIVE VERIFIED"),
-    ("Date", "NOT LIVE VERIFIED"),
-    ("Multi-select", "NOT LIVE VERIFIED"),
-    ("Candidate source", "ApplyWizz existing candidate-details API"),
-    ("Duplicate candidate truth store", "NO"),
-    ("Pause on unknown", "VERIFIED"),
-    ("Intervention dedupe", "VERIFIED"),
-    ("Human resolution", "VERIFIED"),
-    ("Resume eligibility", "VERIFIED"),
-    ("External notification", "NOT BUILT"),
-    ("Live Dice answer filling", "NOT BUILT"),
-    ("Auto-answering", "NOT BUILT"),
-    ("Submit control", "IMPLEMENTED"),
-    ("Submission verification", "LIVE VERIFIED — both SUBMIT_FAILED and VERIFIED_SUBMITTED proven against real Dice evidence"),
-    ("Live submission success (SUBMITTED)", "LIVE VERIFIED — 2 jobs genuinely submitted, 2 different confirmation wordings"),
-]
+def _client_or_none():
+    try:
+        return get_supabase_client(), None
+    except Exception as exc:  # noqa: BLE001 - surfaced to the operator, not swallowed
+        return None, str(exc)
+
+
+# ── Dashboard ────────────────────────────────────────────────────────────
 
 
 @app.route("/")
-def index():
-    return render_template(
-        "index.html",
-        default_role=DEFAULT_ROLE,
-        default_max_results=DEFAULT_MAX_RESULTS,
-        delivery_board=DELIVERY_BOARD,
-        browser_status=BROWSER_STATUS,
-    )
+def dashboard():
+    client, error = _client_or_none()
+    summary = queries.dashboard_summary(client) if client else None
+    return render_template("dashboard.html", active="dashboard", summary=summary, error=error)
 
 
-@app.route("/interventions")
-def interventions_view():
-    """Read-mostly Phase 4F operator view: open interventions (questions
-    Phase 4D couldn't answer automatically), with a local-only resolve
-    form. Never talks to Dice -- resolving here only records an answer
-    in Supabase for a later phase to consume."""
-    try:
-        client = get_supabase_client()
-        # Capped, not because V1 expects many open interventions, but
-        # because the linked project has accumulated OPEN rows from past
-        # test runs that were never cleaned up (a pre-existing gap, not
-        # something this phase caused or fixes) -- without a cap this
-        # view's N+1 job/application lookups make the page impractically
-        # slow.
-        open_interventions = (
-            client.table("interventions")
-            .select("*")
-            .eq("status", "OPEN")
-            .order("created_at", desc=True)
-            .limit(20)
-            .execute()
-            .data
-        )
-    except Exception as exc:  # noqa: BLE001 - surfaced to the operator, not swallowed
-        return render_template("interventions.html", interventions=[], error=str(exc))
-
-    rows = []
-    for iv in open_interventions:
-        app_rows = client.table("applications").select("*").eq("id", iv["application_id"]).execute().data
-        application = app_rows[0] if app_rows else {}
-        job = {}
-        if application.get("dice_job_id"):
-            job_rows = (
-                client.table("dice_jobs")
-                .select("title, company_name")
-                .eq("id", application["dice_job_id"])
-                .execute()
-                .data
-            )
-            job = job_rows[0] if job_rows else {}
-        options = iv.get("options") or {}
-        rows.append(
-            {
-                "intervention_id": iv["id"],
-                "application_id": iv["application_id"],
-                "job_title": job.get("title"),
-                "company_name": job.get("company_name"),
-                "question_prompt": iv.get("question_text"),
-                "field_type": options.get("field_type"),
-                "reason": options.get("reason"),
-                "sensitivity": bool(options.get("sensitivity")),
-                "choices": options.get("choices"),
-                "status": iv["status"],
-            }
-        )
-    return render_template("interventions.html", interventions=rows, error=None)
+# ── Jobs ─────────────────────────────────────────────────────────────────
 
 
-@app.route("/interventions/<intervention_id>/resolve", methods=["POST"])
-def resolve_intervention_view(intervention_id):
-    """Local/internal only -- records a human-supplied answer against one
-    intervention. Never fills or clicks anything on Dice; a later phase
-    consumes the resolved answer."""
-    answer = (request.form.get("answer") or "").strip()
-    try:
-        resolve_question_intervention(intervention_id, answer, source="operator")
-    except (InvalidAnswerError, AlreadyResolvedError, InterventionNotFoundError):
-        pass  # surfaced implicitly: the intervention stays listed if unresolved
-    return redirect(url_for("interventions_view"))
+@app.route("/jobs")
+def jobs():
+    client, error = _client_or_none()
+    filters = {
+        "c2c": request.args.get("c2c") or "",
+        "easy_apply": request.args.get("easy_apply") or "",
+        "state": request.args.get("state") or "",
+        "company": request.args.get("company") or "",
+    }
+    rows = queries.list_jobs(client) if client else []
+    if filters["c2c"]:
+        rows = [r for r in rows if r["c2c_status"] == filters["c2c"]]
+    if filters["easy_apply"] == "yes":
+        rows = [r for r in rows if r["is_easy_apply"]]
+    if filters["state"]:
+        rows = [r for r in rows if r["current_state"] == filters["state"]]
+    if filters["company"]:
+        needle = filters["company"].lower()
+        rows = [r for r in rows if needle in (r.get("company_name") or "").lower()]
+    return render_template("jobs.html", active="jobs", jobs=rows, filters=filters, error=error)
+
+
+@app.route("/jobs/<job_id>")
+def job_detail_view(job_id):
+    client, error = _client_or_none()
+    job = queries.job_detail(client, job_id) if client else None
+    if job is None and not error:
+        error = "Job not found."
+    return render_template("job_detail.html", active="jobs", job=job, error=error)
 
 
 @app.route("/api/discover", methods=["POST"])
@@ -182,6 +104,208 @@ def api_discover():
 
     rows = run_discovery(role=role, max_results=max_results)
     return jsonify({"role": role, "max_results": max_results, "jobs": rows})
+
+
+# ── Applications ─────────────────────────────────────────────────────────
+
+
+@app.route("/applications")
+def applications():
+    client, error = _client_or_none()
+    data = queries.list_applications(client) if client else {"counts": queries.application_counts([]), "rows": []}
+    status_filter = request.args.get("status") or ""
+    rows = data["rows"]
+    if status_filter:
+        rows = [r for r in rows if r["status"] == status_filter]
+    return render_template(
+        "applications.html", active="applications", rows=rows, counts=data["counts"], status_filter=status_filter, error=error
+    )
+
+
+@app.route("/applications/<application_id>")
+def application_detail_view(application_id):
+    client, error = _client_or_none()
+    detail = queries.application_detail(client, application_id) if client else None
+    if detail is None and not error:
+        error = "Application not found."
+    if detail is None:
+        return render_template("application_detail.html", active="applications", error=error, application={}, job={}, events=[], interventions=[], timeline=[])
+    return render_template(
+        "application_detail.html",
+        active="applications",
+        error=None,
+        application=detail["application"],
+        job=detail["job"],
+        events=detail["events"],
+        interventions=detail["interventions"],
+        timeline=detail["timeline"],
+    )
+
+
+@app.route("/applications/<application_id>/resume", methods=["POST"])
+def resume_application_view(application_id):
+    """Resumes through the real worker CLI (dice_browser.worker
+    --resume-application-id), launched as a detached subprocess -- never
+    imports/runs the worker in-process inside this Flask request, and
+    never just relinks to an old browser tab."""
+    subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "dice_browser.worker",
+            "--resume-application-id",
+            application_id,
+            "--resume-path",
+            _RESUME_PATH,
+        ],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return redirect(url_for("application_detail_view", application_id=application_id))
+
+
+# ── Interventions ────────────────────────────────────────────────────────
+
+
+@app.route("/interventions")
+def interventions_view():
+    client, error = _client_or_none()
+    rows = queries.list_interventions(client, status="OPEN") if client else []
+    return render_template("interventions.html", active="interventions", interventions=rows, error=error)
+
+
+@app.route("/interventions/<intervention_id>")
+def intervention_detail_view(intervention_id):
+    client, error = _client_or_none()
+    iv = queries.intervention_detail(client, intervention_id) if client else None
+    if iv is None and not error:
+        error = "Intervention not found."
+    return render_template("intervention_detail.html", active="interventions", iv=iv, error=error)
+
+
+@app.route("/interventions/<intervention_id>/resolve", methods=["POST"])
+def resolve_intervention_view(intervention_id):
+    """Records a human-supplied answer against one intervention. Never
+    fills or clicks anything on Dice; the worker's resume path consumes
+    the resolved answer next time it runs."""
+    answer = (request.form.get("answer") or "").strip()
+    try:
+        resolve_question_intervention(intervention_id, answer, source="operator")
+    except (InvalidAnswerError, AlreadyResolvedError, InterventionNotFoundError):
+        pass  # surfaced implicitly: the intervention stays listed if unresolved
+    return redirect(url_for("interventions_view"))
+
+
+# ── Events ───────────────────────────────────────────────────────────────
+
+_EVENT_TYPES = [
+    "easy_apply_opened", "resume_uploaded", "answer_filled_from_resolved_intervention",
+    "answer_auto_filled", "awaiting_submit_confirmation", "submission_result",
+]
+
+
+@app.route("/events")
+def events():
+    client, error = _client_or_none()
+    filters = {
+        "event_type": request.args.get("event_type") or "",
+        "failures_only": request.args.get("failures_only") == "1",
+        "submissions_only": request.args.get("submissions_only") == "1",
+    }
+    rows = (
+        queries.list_events(
+            client,
+            event_type=filters["event_type"] or None,
+            failures_only=filters["failures_only"],
+            submissions_only=filters["submissions_only"],
+        )
+        if client
+        else []
+    )
+    return render_template("events.html", active="events", events=rows, filters=filters, event_types=_EVENT_TYPES, error=error)
+
+
+# ── Worker ───────────────────────────────────────────────────────────────
+
+
+@app.route("/worker")
+def worker_view():
+    client, error = _client_or_none()
+    status = queries.worker_status_summary(client) if client else None
+    return render_template("worker.html", active="worker", status=status, error=error)
+
+
+# ── Candidate ────────────────────────────────────────────────────────────
+
+_CANDIDATE_FIELDS = [
+    ("Name", "name", False), ("Email", "email", False), ("Phone", "phone", False),
+    ("Location", "location", False), ("Work Authorization", "work_authorized", True),
+    ("Sponsorship Needed", "requires_sponsorship", True), ("Visa Type", "visa_type", True),
+    ("Relocation", "willing_to_relocate", False), ("Experience", "experience_years", False),
+    ("Earliest Start Date", "desired_start_date", False), ("LinkedIn", "linkedin_url", False),
+    ("GitHub", "github_url", False), ("Resume", "resume_url", False),
+]
+
+
+@app.route("/candidate")
+def candidate_view():
+    import os
+
+    configured = bool(os.environ.get("APPLYWIZZ_API_BASE_URL"))
+    candidate_id = request.args.get("candidate_id") or "23374e49-9458-4614-ba5a-ae84ccd3b320"
+    fetch_error = None
+    fields = [(label, None, sensitive) for label, _, sensitive in _CANDIDATE_FIELDS]
+
+    if configured:
+        result = fetch_candidate(candidate_id)
+        if result.profile is not None:
+            fields = [(label, getattr(result.profile, attr), sensitive) for label, attr, sensitive in _CANDIDATE_FIELDS]
+        else:
+            fetch_error = result.error
+
+    return render_template(
+        "candidate.html", active="candidate", configured=configured, fetch_error=fetch_error, candidate_id=candidate_id, fields=fields
+    )
+
+
+# ── Browser Session ──────────────────────────────────────────────────────
+
+
+@app.route("/browser-session")
+def browser_session_view():
+    connection = browser_check.check_connection()
+    return render_template(
+        "browser_session.html",
+        active="browser_session",
+        cdp_url=browser_check.CDP_URL,
+        connection=connection,
+        full_check=browser_check.last_full_check(),
+    )
+
+
+@app.route("/browser-session/recheck", methods=["POST"])
+def browser_session_recheck():
+    browser_check.run_full_check()
+    return redirect(url_for("browser_session_view"))
+
+
+# ── Settings ─────────────────────────────────────────────────────────────
+
+
+@app.route("/settings")
+def settings_view():
+    import os
+
+    connection = browser_check.check_connection()
+    return render_template(
+        "settings.html",
+        active="settings",
+        candidate_source_configured=bool(os.environ.get("APPLYWIZZ_API_BASE_URL")),
+        browser_connected=connection["connected"],
+        resume_path=_RESUME_PATH,
+    )
 
 
 if __name__ == "__main__":

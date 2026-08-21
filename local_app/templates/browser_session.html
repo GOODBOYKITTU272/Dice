@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Browser Session{% endblock %}
+{% block content %}
+<h1>Browser Session</h1>
+<p class="subtitle">Internal/debugging view of the persistent, human-authenticated Dice browser. No cookies or tokens are ever shown here.</p>
+
+<div class="card">
+  <h2>Connection</h2>
+  <dl class="kv">
+    <dt>Browser Profile</dt><dd>dice-persistent-1</dd>
+    <dt>CDP Connection</dt><dd>{{ cdp_url }}</dd>
+    <dt>Connection Status</dt><dd><span class="badge {{ 'green' if connection.connected else 'red' }}">{{ 'Connected' if connection.connected else 'Disconnected' }}</span></dd>
+    <dt>Open Tabs</dt><dd>{{ connection.tab_count if connection.connected else '—' }}</dd>
+    <dt>Current Dice URL</dt><dd>{{ connection.dice_tab_url or '—' }}</dd>
+  </dl>
+</div>
+
+<div class="card">
+  <h2>Authentication</h2>
+  {% if full_check %}
+  <dl class="kv">
+    <dt>Auth State</dt><dd><span class="badge {{ 'green' if full_check.authenticated == 'ACTIVE' else 'red' }}">{{ full_check.authenticated or 'UNKNOWN' }}</span></dd>
+    <dt>Current URL</dt><dd>{{ full_check.current_url or '—' }}</dd>
+    <dt>Challenge Detected</dt><dd>{{ full_check.challenge or 'No' }}</dd>
+    {% if full_check.error %}<dt>Error</dt><dd class="muted">{{ full_check.error }}</dd>{% endif %}
+  </dl>
+  {% else %}
+  <p class="muted">Not checked yet this session — click Recheck Session.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <form method="post" action="{{ url_for('browser_session_recheck') }}" style="display:inline;">
+    <button class="btn" type="submit">Recheck Session</button>
+  </form>
+  <a class="btn secondary" href="{{ cdp_url }}/json" target="_blank" rel="noopener">Open Dice Browser (CDP inspector)</a>
+</div>
+{% endblock %}

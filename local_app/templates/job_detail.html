@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ job.title }}{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('jobs') }}">&larr; Jobs</a></p>
+<h1>{{ job.title }}</h1>
+<p class="subtitle">{{ job.company_name or 'Unknown company' }} — {{ job.location or 'Unknown location' }}</p>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2>Stored qualification</h2>
+    <dl class="kv">
+      <dt>C2C Status</dt><dd><span class="badge {{ 'green' if job.c2c_status == 'CONFIRMED' else ('amber' if job.c2c_status == 'LIKELY' else '') }}">{{ job.c2c_status }}</span></dd>
+      <dt>C2C Reason</dt><dd>{{ job.c2c_reason or '—' }}</dd>
+      <dt>Easy Apply</dt><dd>{{ 'Yes' if job.is_easy_apply else 'No' }}</dd>
+      <dt>Employment Type</dt><dd>{{ job.employment_type or '—' }}</dd>
+      <dt>Discovered At</dt><dd>{{ job.discovered_at }}</dd>
+    </dl>
+  </div>
+  <div class="card">
+    <h2>Last live qualification</h2>
+    {% if job.last_checked_at %}
+    <p class="muted">Last checked: {{ job.last_checked_at }}</p>
+    {% else %}
+    <p class="muted">Never re-checked live since discovery — stored qualification above is discovery-time evidence only.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2>Applications for this job</h2>
+  {% if job.applications %}
+  <table>
+    <tr><th>Application</th><th>Candidate</th><th>Status</th><th>Updated</th></tr>
+    {% for app in job.applications %}
+    <tr>
+      <td><a href="{{ url_for('application_detail_view', application_id=app.id) }}">{{ app.id }}</a></td>
+      <td class="muted">{{ app.candidate_id }}</td>
+      <td><span class="badge {{ 'green' if app.status == 'SUBMITTED' else '' }}">{{ app.status }}</span></td>
+      <td class="muted">{{ app.updated_at }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No application created for this job yet.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <p><a href="{{ job.canonical_url }}" target="_blank" rel="noopener">Open on Dice.com &rarr;</a></p>
+</div>
+{% endblock %}

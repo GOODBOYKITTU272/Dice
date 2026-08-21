@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="subtitle">Configure DicePilot behavior and preferences.</p>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2>Submission Policy</h2>
+    <p><span class="badge amber">Require Confirmation</span> (current, default)</p>
+    <p class="muted" style="font-size:0.82rem;">Reaching Review never triggers Submit by itself. Authorized Autonomous mode is architected and tested but not enabled.</p>
+  </div>
+  <div class="card">
+    <h2>Run Limits</h2>
+    <p>Maximum applications per run: <strong>1</strong></p>
+    <p class="muted" style="font-size:0.82rem;">Raised only after explicit approval (Phase 7).</p>
+  </div>
+</div>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2>Candidate Source</h2>
+    <p><span class="badge {{ 'green' if candidate_source_configured else 'red' }}">{{ 'Connected' if candidate_source_configured else 'Not Configured' }}</span></p>
+    <p class="muted" style="font-size:0.82rem;">ApplyWizz candidate-details API (APPLYWIZZ_API_BASE_URL / APPLYWIZZ_API_TOKEN).</p>
+  </div>
+  <div class="card">
+    <h2>Browser</h2>
+    <p><span class="badge {{ 'green' if browser_connected else 'red' }}">{{ 'Connected' if browser_connected else 'Disconnected' }}</span></p>
+    <p class="muted" style="font-size:0.82rem;">Persistent, human-authenticated Dice session over CDP.</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Resume</h2>
+  <p class="muted">{{ resume_path }}</p>
+</div>
+
+<div class="card">
+  <h2>Safety Rules (Always Enforced)</h2>
+  <ul>
+    <li>Never guess unknown answers</li>
+    <li>Never bypass security challenges</li>
+    <li>Never auto-retry uncertain submissions</li>
+    <li>Verify every successful application against real Dice evidence before marking it submitted</li>
+  </ul>
+</div>
+{% endblock %}

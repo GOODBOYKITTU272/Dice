@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Candidate{% endblock %}
+{% block content %}
+<h1>Candidate / Profile</h1>
+<p class="subtitle">Authorized candidate information. Read-only — ApplyWizz's own candidate-details API remains the source of truth; nothing here is a second candidate database.</p>
+
+{% if not configured %}
+<div class="error">Candidate source not configured — APPLYWIZZ_API_BASE_URL / APPLYWIZZ_API_TOKEN are not set. Every field below is shown as Missing, honestly, rather than guessed.</div>
+{% elif fetch_error %}
+<div class="error">Could not fetch candidate: {{ fetch_error }}</div>
+{% endif %}
+
+<div class="card">
+  <p class="muted">candidate_id: {{ candidate_id }}</p>
+  <table>
+    <tr><th>Field</th><th>Value</th><th>Status</th></tr>
+    {% for label, value, sensitive in fields %}
+    <tr>
+      <td>{{ label }}</td>
+      <td>
+        {% if value is none %}<span class="field-missing">Not available</span>
+        {% elif sensitive %}<span class="field-avail">Set</span>
+        {% else %}{{ value }}{% endif %}
+      </td>
+      <td>{% if value is none %}<span class="badge">Missing</span>{% else %}<span class="badge green">Available</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

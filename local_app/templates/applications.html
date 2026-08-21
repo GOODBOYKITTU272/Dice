@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Applications{% endblock %}
+{% block content %}
+<h1>Applications</h1>
+<p class="subtitle">Track and manage all job applications.</p>
+
+{% if error %}<div class="error">{{ error }}</div>{% else %}
+
+<div class="grid grid-5">
+  <div class="card stat"><div class="num">{{ counts.submitted }}</div><div class="label">Submitted</div></div>
+  <div class="card stat"><div class="num">{{ counts.needs_input }}</div><div class="label">Needs Input</div></div>
+  <div class="card stat"><div class="num">{{ counts.failed }}</div><div class="label">Failed</div></div>
+  <div class="card stat"><div class="num">{{ counts.running }}</div><div class="label">Running</div></div>
+  <div class="card stat"><div class="num">{{ counts.total }}</div><div class="label">Total</div></div>
+</div>
+
+<form class="filters" method="get">
+  <select name="status" onchange="this.form.submit()">
+    <option value="" {{ 'selected' if not status_filter }}>All Statuses</option>
+    {% for s in ['QUEUED','PROCESSING','NEEDS_INPUT','SUBMITTING','SUBMITTED','FAILED_RETRYABLE','FAILED'] %}
+    <option value="{{ s }}" {{ 'selected' if status_filter == s }}>{{ s }}</option>
+    {% endfor %}
+  </select>
+  <button class="btn secondary" type="submit">Filter</button>
+</form>
+
+<div class="card">
+  <table>
+    <tr><th>Application</th><th>Job</th><th>Company</th><th>Status</th><th>Current Step</th><th>Submitted At</th><th>Last Event</th></tr>
+    {% for row in rows %}
+    <tr>
+      <td><a href="{{ url_for('application_detail_view', application_id=row.id) }}">{{ row.id[:8] }}…</a></td>
+      <td>{{ row.job.title or 'Unknown' }}</td>
+      <td>{{ row.job.company_name or '—' }}</td>
+      <td>
+        <span class="badge {{ 'green' if row.status == 'SUBMITTED' else ('red' if row.status in ('FAILED','FAILED_RETRYABLE') else ('amber' if row.status == 'NEEDS_INPUT' else 'blue')) }}">{{ row.status }}</span>
+        {% if row.status in ('FAILED','FAILED_RETRYABLE') %}<div class="muted" style="font-size:0.75rem; margin-top:0.2rem;">{{ failure_reason(row) }}</div>{% endif %}
+      </td>
+      <td class="muted">{{ row.current_step or '—' }}</td>
+      <td class="muted">{{ row.submitted_at or '—' }}</td>
+      <td class="muted">{{ row.latest_event.event_type if row.latest_event else '—' }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="empty">No applications yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% endif %}
+{% endblock %}

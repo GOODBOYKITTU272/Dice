@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Application{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('applications') }}">&larr; Applications</a></p>
+<h1>{{ job.title or 'Unknown job' }} @ {{ job.company_name or 'Unknown company' }}</h1>
+<p class="subtitle"><span class="badge {{ 'green' if application.status == 'SUBMITTED' else ('red' if application.status in ('FAILED','FAILED_RETRYABLE') else ('amber' if application.status == 'NEEDS_INPUT' else 'blue')) }}">{{ application.status }}</span></p>
+
+{% if application.status in ('FAILED', 'FAILED_RETRYABLE') %}
+<div class="error"><strong>{{ application.error_code or 'FAILED' }}</strong> — {{ failure_reason(application) }}</div>
+{% endif %}
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2>Overview</h2>
+    <dl class="kv">
+      <dt>Application ID</dt><dd>{{ application.id }}</dd>
+      <dt>Dice Job ID</dt><dd>{{ application.dice_job_id }}</dd>
+      <dt>Candidate ID</dt><dd>{{ application.candidate_id }}</dd>
+      <dt>Company</dt><dd>{{ job.company_name or '—' }}</dd>
+      <dt>Location</dt><dd>{{ job.location or '—' }}</dd>
+      <dt>C2C Qualification</dt><dd>{{ job.c2c_status or '—' }}</dd>
+      <dt>Easy Apply</dt><dd>{{ 'Yes' if job.is_easy_apply else 'No' }}</dd>
+      <dt>Created At</dt><dd>{{ application.created_at }}</dd>
+      <dt>Started At</dt><dd>{{ application.started_at or '—' }}</dd>
+      <dt>Submitted At</dt><dd>{{ application.submitted_at or '—' }}</dd>
+    </dl>
+  </div>
+  <div class="card">
+    <h2>Progress</h2>
+    <ul class="timeline">
+      {% for step in timeline %}
+      <li class="{{ 'done' if step.done }}"><span class="dot"></span>{{ step.label }}</li>
+      {% endfor %}
+    </ul>
+    {% if application.status == 'NEEDS_INPUT' %}
+    <p class="muted" style="margin-top:0.75rem;">Stopped awaiting human input — see Interventions below.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% if application.status == 'SUBMITTED' and application.verification_evidence %}
+<div class="card">
+  <div class="banner-success">✅ Submission positively verified by Dice</div>
+  <h2>Verification Evidence</h2>
+  <dl class="kv">
+    <dt>Result</dt><dd><span class="badge green">VERIFIED_SUBMITTED</span></dd>
+    <dt>Confirmation</dt><dd>{{ application.verification_evidence.confirmation_text or '—' }}</dd>
+    <dt>Before URL</dt><dd><a href="{{ application.verification_evidence.before_url }}" target="_blank" rel="noopener">{{ application.verification_evidence.before_url }}</a></dd>
+    <dt>After URL</dt><dd><a href="{{ application.verification_evidence.after_url }}" target="_blank" rel="noopener">{{ application.verification_evidence.after_url }}</a></dd>
+    <dt>Verified At</dt><dd>{{ application.submitted_at }}</dd>
+    <dt>Evidence Source</dt><dd>Dice confirmation page</dd>
+  </dl>
+</div>
+{% endif %}
+
+{% if interventions %}
+<div class="card">
+  <h2>Interventions</h2>
+  <table>
+    <tr><th>Question</th><th>Type</th><th>Status</th></tr>
+    {% for iv in interventions %}
+    <tr>
+      <td><a href="{{ url_for('intervention_detail_view', intervention_id=iv.id) }}">{{ iv.question_text or '(no prompt)' }}</a></td>
+      <td>{{ (iv.options or {}).get('field_type', 'UNKNOWN') }}</td>
+      <td><span class="badge {{ 'green' if iv.status == 'ANSWERED' else 'amber' }}">{{ iv.status }}</span></td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Events</h2>
+  {% if events %}
+  <table>
+    <tr><th>Time</th><th>Event</th><th>Step</th><th>Message</th></tr>
+    {% for e in events %}
+    <tr>
+      <td class="muted">{{ e.created_at }}</td>
+      <td>{{ e.event_type }}</td>
+      <td class="muted">{{ e.step or '—' }}</td>
+      <td class="muted">{{ e.message or '' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No events recorded.</p>
+  {% endif %}
+</div>
+{% endblock %}

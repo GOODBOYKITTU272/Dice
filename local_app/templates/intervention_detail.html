@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}Intervention{% endblock %}
+{% block content %}
+<p><a href="{{ url_for('interventions_view') }}">&larr; Interventions</a></p>
+<h1>{{ iv.job.title or 'Unknown job' }} @ {{ iv.job.company_name or 'Unknown company' }}</h1>
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2>Application</h2>
+    <dl class="kv">
+      <dt>Job</dt><dd>{{ iv.job.title or '—' }}</dd>
+      <dt>Company</dt><dd>{{ iv.job.company_name or '—' }}</dd>
+      <dt>Application ID</dt><dd><a href="{{ url_for('application_detail_view', application_id=iv.application_id) }}">{{ iv.application_id }}</a></dd>
+      <dt>Dice Job ID</dt><dd>{{ iv.application.dice_job_id or '—' }}</dd>
+    </dl>
+  </div>
+  <div class="card">
+    <h2>Question</h2>
+    <p><strong>{{ iv.question_text or '(no prompt captured)' }}</strong></p>
+    <dl class="kv">
+      <dt>Type</dt><dd>{{ iv.field_type or 'UNKNOWN' }}</dd>
+      <dt>Options</dt><dd>{{ iv.choices | join(', ') if iv.choices else '—' }}</dd>
+      <dt>Sensitivity</dt><dd><span class="badge {{ 'red' if iv.sensitivity else '' }}">{{ 'SENSITIVE' if iv.sensitivity else 'NORMAL' }}</span></dd>
+    </dl>
+    <p class="muted">Why DicePilot stopped: {{ iv.reason or 'not recorded' }}</p>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Resolution</h2>
+  <dl class="kv">
+    <dt>Status</dt><dd><span class="badge {{ 'green' if iv.status == 'ANSWERED' else 'amber' }}">{{ iv.status }}</span></dd>
+    <dt>Answer</dt><dd>{{ iv.answer or '—' }}</dd>
+    <dt>Answer Source</dt><dd>{{ iv.answered_by or '—' }}</dd>
+    <dt>Resolved At</dt><dd>{{ iv.resolved_at or '—' }}</dd>
+  </dl>
+
+  {% if iv.status == 'OPEN' %}
+  <form method="post" action="{{ url_for('resolve_intervention_view', intervention_id=iv.id) }}" style="margin-top:1rem; display:flex; gap:0.5rem;">
+    {% if iv.choices %}
+    {% for choice in iv.choices %}
+    <button class="btn secondary" type="submit" name="answer" value="{{ choice }}">{{ choice }}</button>
+    {% endfor %}
+    {% else %}
+    <textarea name="answer" required rows="3" style="flex:1; background:var(--panel); border:1px solid var(--border); color:var(--text); border-radius:0.375rem; padding:0.5rem;"></textarea>
+    <button class="btn" type="submit">Submit Answer</button>
+    {% endif %}
+  </form>
+  {% else %}
+  <form method="post" action="{{ url_for('resume_application_view', application_id=iv.application_id) }}" style="margin-top:1rem;">
+    <button class="btn" type="submit">Resume Application</button>
+  </form>
+  <p class="muted" style="font-size:0.8rem; margin-top:0.4rem;">Resumes through the worker (re-opens the exact application, re-extracts questions, fills every resolved answer) — not a raw link back to an old browser tab.</p>
+  {% endif %}
+</div>
+{% endblock %}

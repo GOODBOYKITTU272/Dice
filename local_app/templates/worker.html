@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Worker{% endblock %}
+{% block content %}
+<h1>Worker</h1>
+<p class="subtitle">Operational control for the standalone sequential self-apply worker.</p>
+
+{% if error %}<div class="error">{{ error }}</div>{% else %}
+
+<div class="grid grid-2">
+  <div class="card">
+    <h2>Status</h2>
+    <dl class="kv">
+      <dt>Status</dt><dd><span class="badge {{ 'green' if status.status == 'RUNNING' else 'blue' }}">{{ status.status }}</span></dd>
+      <dt>Submission Policy</dt><dd><span class="badge amber">REQUIRE_CONFIRMATION</span> (default — reaching Review never triggers Submit by itself)</dd>
+      <dt>Current Application</dt><dd>{% if status.current_application %}<a href="{{ url_for('application_detail_view', application_id=status.current_application.id) }}">{{ status.current_job.title }}</a>{% else %}none{% endif %}</dd>
+    </dl>
+  </div>
+  <div class="card">
+    <h2>Run statistics</h2>
+    <dl class="kv">
+      <dt>Submitted</dt><dd>{{ status.counts.submitted }}</dd>
+      <dt>Needs Input</dt><dd>{{ status.counts.needs_input }}</dd>
+      <dt>Failed</dt><dd>{{ status.counts.failed }}</dd>
+      <dt>Running</dt><dd>{{ status.counts.running }}</dd>
+    </dl>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Controls</h2>
+  <p class="muted">The worker runs as a standalone process against the already-authenticated Dice browser — this page does not drive Playwright itself. Use the CLI directly:</p>
+  <pre style="background:#0d1420; padding:0.75rem 1rem; border-radius:0.375rem; overflow-x:auto; font-size:0.8rem;">.venv/bin/python -m dice_browser.worker --candidate-id &lt;candidate_id&gt; --max-applications 1</pre>
+  <button class="btn" disabled title="Run this from your own terminal — see command above">Run 1 Application</button>
+  <button class="btn secondary" disabled>Stop Worker</button>
+  <p class="muted" style="margin-top:0.75rem; font-size:0.8rem;">Batch runs are disabled until Phase 7 is approved. Max applications per run is currently capped at 1.</p>
+</div>
+
+{% endif %}
+{% endblock %}

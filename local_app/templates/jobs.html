@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Jobs{% endblock %}
+{% block content %}
+<div style="display:flex; justify-content:space-between; align-items:flex-start;">
+  <div>
+    <h1>Jobs</h1>
+    <p class="subtitle">Discovered Dice jobs and their qualification status.</p>
+  </div>
+  <div>
+    <input id="role" type="text" value="Software Engineer" style="background:var(--panel); border:1px solid var(--border); color:var(--text); border-radius:0.375rem; padding:0.4rem 0.6rem; width:180px;">
+    <input id="maxResults" type="number" min="1" max="20" value="5" style="background:var(--panel); border:1px solid var(--border); color:var(--text); border-radius:0.375rem; padding:0.4rem 0.6rem; width:60px;">
+    <button class="btn" id="discoverBtn" onclick="runDiscovery()">Discover Jobs</button>
+  </div>
+</div>
+<div id="discoverStatus" class="muted" style="margin-bottom:0.75rem;"></div>
+
+{% if error %}<div class="error">{{ error }}</div>{% else %}
+
+<form class="filters" method="get">
+  <select name="c2c" onchange="this.form.submit()">
+    <option value="" {{ 'selected' if not filters.c2c }}>All C2C Status</option>
+    <option value="CONFIRMED" {{ 'selected' if filters.c2c == 'CONFIRMED' }}>Confirmed</option>
+    <option value="LIKELY" {{ 'selected' if filters.c2c == 'LIKELY' }}>Likely</option>
+    <option value="NOT_C2C" {{ 'selected' if filters.c2c == 'NOT_C2C' }}>Not C2C</option>
+    <option value="UNKNOWN" {{ 'selected' if filters.c2c == 'UNKNOWN' }}>Unknown</option>
+  </select>
+  <select name="easy_apply" onchange="this.form.submit()">
+    <option value="" {{ 'selected' if not filters.easy_apply }}>Any Easy Apply</option>
+    <option value="yes" {{ 'selected' if filters.easy_apply == 'yes' }}>Easy Apply Only</option>
+  </select>
+  <select name="state" onchange="this.form.submit()">
+    <option value="" {{ 'selected' if not filters.state }}>Any State</option>
+    <option value="NEW" {{ 'selected' if filters.state == 'NEW' }}>New</option>
+    <option value="QUEUED" {{ 'selected' if filters.state == 'QUEUED' }}>Queued</option>
+    <option value="CLAIMED" {{ 'selected' if filters.state == 'CLAIMED' }}>Already processed</option>
+    <option value="SKIPPED" {{ 'selected' if filters.state == 'SKIPPED' }}>Skipped</option>
+  </select>
+  <input type="text" name="company" placeholder="Company" value="{{ filters.company or '' }}">
+  <button class="btn secondary" type="submit">Filter</button>
+</form>
+
+<div class="card">
+  <table>
+    <tr><th>Job Title</th><th>Company</th><th>Location</th><th>Employment Type</th><th>C2C Status</th><th>Easy Apply</th><th>Discovered</th><th>State</th></tr>
+    {% for job in jobs %}
+    <tr>
+      <td><a href="{{ url_for('job_detail_view', job_id=job.id) }}">{{ job.title }}</a></td>
+      <td>{{ job.company_name or '—' }}</td>
+      <td>{{ job.location or '—' }}</td>
+      <td>{{ job.employment_type or '—' }}</td>
+      <td><span class="badge {{ 'green' if job.c2c_status == 'CONFIRMED' else ('amber' if job.c2c_status == 'LIKELY' else ('red' if job.c2c_status == 'NOT_C2C' else '')) }}">{{ job.c2c_status }}</span></td>
+      <td>{{ 'Yes' if job.is_easy_apply else 'No' }}</td>
+      <td class="muted">{{ job.discovered_at }}</td>
+      <td><span class="badge {{ 'blue' if job.current_state in ('NEW','QUEUED') else ('green' if job.current_state == 'CLAIMED' else '') }}">{{ job.current_state }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="empty">No jobs discovered yet.</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% endif %}
+<script>
+async function runDiscovery() {
+  const role = document.getElementById('role').value.trim();
+  const maxResults = parseInt(document.getElementById('maxResults').value, 10) || 5;
+  const btn = document.getElementById('discoverBtn');
+  const status = document.getElementById('discoverStatus');
+  btn.disabled = true;
+  status.textContent = `Running discovery for "${role}"...`;
+  try {
+    const resp = await fetch('/api/discover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role, max_results: maxResults })
+    });
+    const data = await resp.json();
+    status.textContent = `Done — ${data.jobs.length} job(s) processed. Reloading...`;
+    window.location.reload();
+  } catch (err) {
+    status.textContent = 'Discovery failed: ' + err;
+    btn.disabled = false;
+  }
+}
+</script>
+{% endblock %}
