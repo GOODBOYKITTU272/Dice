@@ -8,26 +8,35 @@
 <p><a href="{{ url_for('applications') }}">&larr; Applications</a></p>
 <h1>Run Progress</h1>
 {% if progress %}
-<p class="subtitle">Run {{ run_id }} — <span class="badge {{ 'blue' if progress.run.status in ('QUEUED','RUNNING') else ('green' if progress.run.status == 'COMPLETE' else '') }}">{{ progress.run.status }}</span></p>
+<p class="subtitle">
+  Run Status:
+  <span class="badge {{ 'blue' if progress.run.status in ('QUEUED','RUNNING') else ('green' if progress.run.status == 'COMPLETE' else '') }}">{{ progress.run.status }}</span>
+</p>
+{% endif %}
+
+{% if launch_error %}
+<div class="error">The worker could not be started: {{ launch_error }}. The jobs are still queued for this run — you can retry via the CLI: <code>.venv/bin/python -m dice_browser.worker --run-id {{ run_id }}</code></div>
 {% endif %}
 
 {% if error %}<div class="error">{{ error }}</div>
 {% elif not progress %}<div class="error">Run not found.</div>
 {% else %}
 
+<p class="muted" style="margin-bottom:1rem;">DicePilot automates the application up to the final Submit step. Applications ready for submission will appear here.</p>
+
 <div class="grid grid-5">
   <div class="card stat"><div class="num">{{ progress.counts.selected }}</div><div class="label">Selected</div></div>
   <div class="card stat"><div class="num">{{ progress.counts.processed }}</div><div class="label">Processed</div></div>
   <div class="card stat"><div class="num">{{ progress.counts.submitted }}</div><div class="label">Submitted</div></div>
   <div class="card stat"><div class="num">{{ progress.counts.needs_input }}</div><div class="label">Needs Input</div></div>
-  <div class="card stat"><div class="num">{{ progress.counts.remaining }}</div><div class="label">Remaining</div></div>
+  <div class="card stat"><div class="num">{{ progress.counts.failed }}</div><div class="label">Failed</div></div>
 </div>
 
 <div class="card">
-  <h2>Current job</h2>
+  <h2>Current Job</h2>
   {% if progress.current %}
   <p><strong>{{ progress.current.job.title or 'Unknown' }}</strong> — {{ progress.current.job.company_name or '—' }}</p>
-  <p class="muted">Current worker step: {{ progress.current.current_step_label }}</p>
+  <p class="muted">Current Step: {{ progress.current.current_step_label }}</p>
   {% else %}
   <p class="muted">No job actively running right now.</p>
   {% endif %}
@@ -41,25 +50,27 @@
       <td>{{ row.job.title or 'Unknown' }}</td>
       <td>{{ row.job.company_name or '—' }}</td>
       <td>
-        <span class="badge {{ 'green' if row.status == 'SUBMITTED' else ('red' if row.status in ('FAILED','FAILED_RETRYABLE') else ('amber' if row.status == 'NEEDS_INPUT' else 'blue')) }}">
-          {{ 'RUNNING' if row.status in ('PROCESSING','SUBMITTING') else row.status }}
+        <span class="badge {{ 'green' if row.display_status == 'SUBMITTED' else ('red' if row.display_status in ('FAILED','FAILED_RETRYABLE') else ('amber' if row.display_status in ('NEEDS_INPUT', 'AWAITING_SUBMIT_CONFIRMATION') else 'blue')) }}">
+          {{ row.display_status }}
         </span>
       </td>
       <td class="muted">{{ row.current_step_label if row.status in ('PROCESSING','SUBMITTING') else '—' }}</td>
       <td class="muted">
-        {% if row.status == 'SUBMITTED' %}✅ Verified submitted
-        {% elif row.status in ('FAILED','FAILED_RETRYABLE') %}{{ failure_reason(row) }}
-        {% elif row.status == 'NEEDS_INPUT' and row.open_intervention_id %}Waiting on your answer
-        {% elif row.status == 'NEEDS_INPUT' %}Awaiting Submit confirmation
+        {% if row.display_status == 'SUBMITTED' %}✅ Verified submitted
+        {% elif row.display_status in ('FAILED','FAILED_RETRYABLE') %}{{ failure_reason(row) }}
+        {% elif row.display_status == 'NEEDS_INPUT' %}Needs Input
+        {% elif row.display_status == 'AWAITING_SUBMIT_CONFIRMATION' %}Ready to Submit
         {% else %}—{% endif %}
       </td>
       <td>
+        {% if row.display_status == 'AWAITING_SUBMIT_CONFIRMATION' %}
+        <a href="{{ url_for('application_detail_view', application_id=row.id) }}">Review &amp; Submit</a>
+        {% elif row.display_status == 'NEEDS_INPUT' and row.open_intervention_id %}
+        <a href="{{ url_for('intervention_detail_view', intervention_id=row.open_intervention_id) }}">Answer Question</a>
+        {% elif row.display_status == 'SUBMITTED' %}
+        <a href="{{ url_for('application_detail_view', application_id=row.id) }}">View Verification</a>
+        {% else %}
         <a href="{{ url_for('application_detail_view', application_id=row.id) }}">View Application</a>
-        {% if row.status == 'NEEDS_INPUT' and row.open_intervention_id %}
-        &nbsp;·&nbsp;<a href="{{ url_for('intervention_detail_view', intervention_id=row.open_intervention_id) }}">Answer Question</a>
-        {% endif %}
-        {% if row.status == 'SUBMITTED' %}
-        &nbsp;·&nbsp;<a href="{{ url_for('application_detail_view', application_id=row.id) }}">View Verification</a>
         {% endif %}
       </td>
     </tr>

@@ -197,7 +197,7 @@ def test_submitted_job_cannot_enter_a_new_run(configured_candidate, fake_popen):
     try:
         resp = _client().post("/jobs/apply", data={"job_id": [job["id"]]}, follow_redirects=False)
         assert resp.status_code == 302
-        assert "queued=0" in resp.headers["Location"]  # not queued into a run at all
+        assert "no_eligible_jobs=1" in resp.headers["Location"]  # not queued into a run at all
         assert fake_popen == []  # no worker launched for zero queued jobs
     finally:
         _cleanup(job["id"])
@@ -207,7 +207,7 @@ def test_skipped_job_cannot_enter_a_new_run(configured_candidate, fake_popen):
     job = _make_job("TEST Skipped Cannot Enter Run", easy_apply=False)
     try:
         resp = _client().post("/jobs/apply", data={"job_id": [job["id"]]}, follow_redirects=False)
-        assert "queued=0" in resp.headers["Location"]
+        assert "no_eligible_jobs=1" in resp.headers["Location"]
         assert fake_popen == []
     finally:
         _cleanup(job["id"])

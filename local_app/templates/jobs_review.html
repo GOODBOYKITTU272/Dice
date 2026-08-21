@@ -64,10 +64,10 @@
     {% for job in jobs %}
     <input type="hidden" name="job_id" value="{{ job.id }}">
     {% endfor %}
-    <button type="submit" class="btn">Apply to Selected Jobs</button>
+    <button type="submit" class="btn">Start Applications</button>
     <a class="btn secondary" href="{{ url_for('jobs') }}">Back to Selection</a>
   </form>
-  <p class="muted" style="font-size:0.8rem; margin-top:0.75rem;">This queues the selected jobs (creates QUEUED application rows) for the existing Phase 6 sequential worker. It does not run any application itself — the worker still processes jobs one at a time, with live requalification, auth checks, NEEDS_INPUT pauses, and verified-submission-only, exactly as it already does.</p>
+  <p class="muted" style="font-size:0.8rem; margin-top:0.75rem;">DicePilot will process these selected jobs one at a time.</p>
 </div>
 
 {% endif %}

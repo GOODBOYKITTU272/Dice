@@ -6,8 +6,8 @@
 
 {% if error %}<div class="error">{{ error }}</div>{% else %}
 
-{% if just_queued %}
-<div class="banner-success">✅ {{ just_queued }} job{{ '' if just_queued == '1' else 's' }} queued for the worker. Nothing has run yet — process them via the Worker page / CLI.</div>
+{% if no_eligible_jobs %}
+<div class="error">None of the selected jobs were queued — they may already be in progress, submitted, or otherwise no longer eligible. <a href="{{ url_for('jobs') }}">Go back and select different jobs</a>.</div>
 {% endif %}
 
 <div class="grid grid-5">

@@ -390,18 +390,34 @@ def run_progress(client, run: dict[str, Any]) -> dict[str, Any]:
                 .data
             )
             open_intervention_id = open_rows[0]["id"] if open_rows else None
+
+        # applications.status has no AWAITING_SUBMIT_CONFIRMATION value of
+        # its own (it's stored as NEEDS_INPUT -- see worker.py's
+        # _gate_and_maybe_submit -- specifically so it doesn't block a
+        # sibling claim) -- computed here purely for display so the UI can
+        # tell "reached Review, awaiting your Submit" apart from "genuinely
+        # blocked on an unanswerable question" without a schema change.
+        if application["status"] == "NEEDS_INPUT" and open_intervention_id is None:
+            display_status = "AWAITING_SUBMIT_CONFIRMATION"
+        elif application["status"] in _RUNNING_STATUSES:
+            display_status = "RUNNING"
+        else:
+            display_status = application["status"]
+
         rows.append(
             {
                 **application,
                 "job": job,
                 "current_step_label": _current_step_label(latest_event),
                 "open_intervention_id": open_intervention_id,
+                "display_status": display_status,
             }
         )
 
     running = [r for r in rows if r["status"] in _RUNNING_STATUSES]
-    submitted = sum(1 for r in rows if r["status"] == "SUBMITTED")
-    needs_input = sum(1 for r in rows if r["status"] == "NEEDS_INPUT")
+    submitted = sum(1 for r in rows if r["display_status"] == "SUBMITTED")
+    needs_input = sum(1 for r in rows if r["display_status"] == "NEEDS_INPUT")
+    awaiting_confirmation = sum(1 for r in rows if r["display_status"] == "AWAITING_SUBMIT_CONFIRMATION")
     failed = sum(1 for r in rows if r["status"] in _FAILED_STATUSES)
     remaining = sum(1 for r in rows if r["status"] == "QUEUED")
 
@@ -411,9 +427,10 @@ def run_progress(client, run: dict[str, Any]) -> dict[str, Any]:
         "current": running[0] if running else None,
         "counts": {
             "selected": len(rows),
-            "processed": submitted + needs_input + failed,
+            "processed": submitted + needs_input + awaiting_confirmation + failed,
             "submitted": submitted,
             "needs_input": needs_input,
+            "awaiting_confirmation": awaiting_confirmation,
             "failed": failed,
             "running": len(running),
             "remaining": remaining,

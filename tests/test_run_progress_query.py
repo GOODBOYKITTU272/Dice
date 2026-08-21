@@ -50,6 +50,7 @@ def _cleanup(*job_ids: str):
 def test_run_progress_counters_reflect_mixed_statuses():
     job_submitted, app_submitted = _make_job_and_application("TEST Progress Submitted")
     job_needs_input, app_needs_input = _make_job_and_application("TEST Progress NeedsInput")
+    job_awaiting, app_awaiting = _make_job_and_application("TEST Progress Awaiting")
     job_failed, app_failed = _make_job_and_application("TEST Progress Failed")
     job_running, app_running = _make_job_and_application("TEST Progress Running")
     job_queued, app_queued = _make_job_and_application("TEST Progress Queued")
@@ -58,8 +59,21 @@ def test_run_progress_counters_reflect_mixed_statuses():
         update_application_status(app_submitted["id"], "SUBMITTING")
         update_application_status(app_submitted["id"], "SUBMITTED", submitted_at="2026-08-22T00:00:00Z")
 
+        # Genuinely NEEDS_INPUT: a real open intervention exists.
+        # create_intervention() itself transitions PROCESSING -> NEEDS_INPUT.
         update_application_status(app_needs_input["id"], "PROCESSING")
-        update_application_status(app_needs_input["id"], "NEEDS_INPUT")
+        create_intervention(
+            application_id=app_needs_input["id"],
+            intervention_type="MISSING_CANDIDATE_FACT",
+            intervention_scope="APPLICATION_LEVEL",
+            question_text="Expected salary?",
+            options={"question_id": "q-1", "field_type": "TEXTAREA", "reason": "no trusted mapping", "sensitivity": False, "choices": None},
+        )
+
+        # AWAITING_SUBMIT_CONFIRMATION: NEEDS_INPUT status but no open
+        # intervention -- reached Review under REQUIRE_CONFIRMATION.
+        update_application_status(app_awaiting["id"], "PROCESSING")
+        update_application_status(app_awaiting["id"], "NEEDS_INPUT")
 
         update_application_status(app_failed["id"], "PROCESSING")
         update_application_status(app_failed["id"], "FAILED", error_code="TEST", error_message="boom")
@@ -71,20 +85,21 @@ def test_run_progress_counters_reflect_mixed_statuses():
             "candidate_id": CANDIDATE,
             "status": "RUNNING",
             "application_ids": [
-                app_submitted["id"], app_needs_input["id"], app_failed["id"], app_running["id"], app_queued["id"],
+                app_submitted["id"], app_needs_input["id"], app_awaiting["id"], app_failed["id"], app_running["id"], app_queued["id"],
             ],
         }
         progress = queries.run_progress(_client(), run)
 
-        assert progress["counts"]["selected"] == 5
+        assert progress["counts"]["selected"] == 6
         assert progress["counts"]["submitted"] == 1
         assert progress["counts"]["needs_input"] == 1
+        assert progress["counts"]["awaiting_confirmation"] == 1
         assert progress["counts"]["failed"] == 1
         assert progress["counts"]["running"] == 1
         assert progress["counts"]["remaining"] == 1  # only the still-QUEUED one
-        assert progress["counts"]["processed"] == 3  # submitted + needs_input + failed
+        assert progress["counts"]["processed"] == 4  # submitted + needs_input + awaiting_confirmation + failed
     finally:
-        _cleanup(job_submitted["id"], job_needs_input["id"], job_failed["id"], job_running["id"], job_queued["id"])
+        _cleanup(job_submitted["id"], job_needs_input["id"], job_awaiting["id"], job_failed["id"], job_running["id"], job_queued["id"])
 
 
 # "current job visible" + current_step_label derives from the latest event

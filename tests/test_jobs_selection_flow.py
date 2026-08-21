@@ -261,7 +261,7 @@ def test_apply_twice_does_not_create_duplicate_application_rows():
         _client().post("/jobs/apply", data={"job_id": [job["id"]]}, follow_redirects=False)
         resp2 = _client().post("/jobs/apply", data={"job_id": [job["id"]]}, follow_redirects=False)
         assert resp2.status_code == 302
-        assert "queued=0" in resp2.headers["Location"]  # already had one -- DuplicateApplicationError caught, not queued again
+        assert "no_eligible_jobs=1" in resp2.headers["Location"]  # already had one -- DuplicateApplicationError caught, not queued again
 
         sc = get_supabase_client()
         apps = sc.table("applications").select("*").eq("dice_job_id", job["id"]).execute().data
@@ -284,7 +284,7 @@ def test_apply_skips_ineligible_job_even_if_submitted_in_form():
     update_application_status(application["id"], "SUBMITTED", submitted_at="2026-08-21T00:00:00Z")
     try:
         resp = _client().post("/jobs/apply", data={"job_id": [job["id"]]}, follow_redirects=False)
-        assert "queued=0" in resp.headers["Location"]
+        assert "no_eligible_jobs=1" in resp.headers["Location"]
         sc = get_supabase_client()
         apps = sc.table("applications").select("*").eq("dice_job_id", job["id"]).execute().data
         assert len(apps) == 1  # still just the one SUBMITTED row, nothing new queued

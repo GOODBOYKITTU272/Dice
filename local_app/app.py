@@ -167,17 +167,25 @@ def jobs_apply():
             continue  # already has an application row -- not a duplicate, a no-op
 
     if not queued_application_ids:
-        return redirect(url_for("applications", queued=0))
+        return redirect(url_for("applications", no_eligible_jobs=1))
 
     run = run_registry.create_run(queued_application_ids, candidate_id=candidate_id)
 
-    subprocess.Popen(
-        [sys.executable, "-m", "dice_browser.worker", "--run-id", run["id"], "--resume-path", _RESUME_PATH],
-        cwd=str(Path(__file__).resolve().parent.parent),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    try:
+        subprocess.Popen(
+            [sys.executable, "-m", "dice_browser.worker", "--run-id", run["id"], "--resume-path", _RESUME_PATH],
+            cwd=str(Path(__file__).resolve().parent.parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        # The run and its queued applications already exist in Supabase --
+        # only the worker process itself failed to start (e.g. this Flask
+        # process can't spawn a subprocess here, such as on a serverless
+        # deployment). Land on Run Progress anyway with a specific error
+        # rather than a generic 500 or a misleading "it's running" redirect.
+        return redirect(url_for("run_progress_view", run_id=run["id"], launch_error=str(exc)))
 
     return redirect(url_for("run_progress_view", run_id=run["id"]))
 
@@ -191,7 +199,14 @@ def run_progress_view(run_id):
 
     client, error = _client_or_none()
     progress = queries.run_progress(client, run) if client else None
-    return render_template("run_progress.html", active="jobs", run_id=run_id, progress=progress, error=error)
+    return render_template(
+        "run_progress.html",
+        active="jobs",
+        run_id=run_id,
+        progress=progress,
+        error=error,
+        launch_error=request.args.get("launch_error"),
+    )
 
 
 @app.route("/runs/<run_id>/stop", methods=["POST"])
@@ -238,7 +253,7 @@ def applications():
         counts=data["counts"],
         status_filter=status_filter,
         error=error,
-        just_queued=request.args.get("queued"),
+        no_eligible_jobs=request.args.get("no_eligible_jobs"),
     )
 
 
