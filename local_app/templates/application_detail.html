@@ -3,14 +3,55 @@
 {% block content %}
 <p><a href="{{ url_for('applications') }}">&larr; Applications</a></p>
 <h1>{{ job.title or 'Unknown job' }} @ {{ job.company_name or 'Unknown company' }}</h1>
-<p class="subtitle"><span class="badge {{ 'green' if application.status == 'SUBMITTED' else ('red' if application.status in ('FAILED','FAILED_RETRYABLE') else ('amber' if application.status == 'NEEDS_INPUT' else 'blue')) }}">{{ application.status }}</span></p>
+<p class="subtitle"><span class="badge {{ 'green' if display_status == 'SUBMITTED' else ('red' if display_status in ('FAILED','FAILED_RETRYABLE') else ('amber' if display_status in ('NEEDS_INPUT','AWAITING_SUBMIT_CONFIRMATION') else 'blue')) }}">{{ display_status }}</span></p>
 
-{% if application.status in ('FAILED', 'FAILED_RETRYABLE') %}
-<div class="error"><strong>{{ application.error_code or 'FAILED' }}</strong> — {{ failure_reason(application) }}</div>
+{% if display_status == 'QUEUED' %}
+<div class="card" style="border-left: 4px solid var(--accent);">
+  <h2>Queued for worker</h2>
+  <p class="muted">This application has not started yet. DicePilot will process it when the selected run reaches this job.</p>
+</div>
+
+{% elif display_status == 'RUNNING' %}
+<div class="card" style="border-left: 4px solid var(--green);">
+  <h2>Application in progress</h2>
+  <p class="muted">Current step: {{ current_step_label }}</p>
+  {% if run %}<p><a href="{{ url_for('run_progress_view', run_id=run.id) }}" class="btn secondary">View Run Progress</a></p>{% endif %}
+</div>
+
+{% elif display_status == 'NEEDS_INPUT' %}
+<div class="card" style="border-left: 4px solid var(--amber);">
+  <h2>DicePilot needs your input</h2>
+  <p class="muted">{{ open_interventions|length }} question{{ '' if open_interventions|length == 1 else 's' }} blocking this application.</p>
+  {% if open_interventions %}
+  {% set latest_iv = open_interventions[0] %}
+  <p><strong>{{ latest_iv.question_text or '(no prompt captured)' }}</strong></p>
+  <p class="muted">Reason: {{ (latest_iv.options or {}).get('reason', 'not recorded') }}</p>
+  <p>
+    <a href="{{ url_for('intervention_detail_view', intervention_id=latest_iv.id) }}" class="btn">Answer Question</a>
+    <a href="{{ url_for('interventions_view') }}" class="btn secondary">View Interventions</a>
+  </p>
+  {% endif %}
+</div>
+
+{% elif display_status == 'AWAITING_SUBMIT_CONFIRMATION' %}
+<div class="card" style="border-left: 4px solid var(--amber);">
+  <h2>Ready to submit</h2>
+  <p class="muted">DicePilot completed the application and reached the final Review step. Submission requires confirmation under the current policy.</p>
+  <p>
+    <a href="#overview" class="btn">Review Application</a>
+    {% if run %}<a href="{{ url_for('run_progress_view', run_id=run.id) }}" class="btn secondary">View Run Progress</a>{% endif %}
+  </p>
+</div>
+
+{% elif display_status == 'SUBMITTED' %}
+<div class="banner-success">✅ Submission positively verified by Dice</div>
+
+{% elif display_status in ('FAILED', 'FAILED_RETRYABLE') %}
+<div class="error"><strong>Application stopped</strong> — {{ application.error_code or 'FAILED' }}: {{ failure_reason(application) }}</div>
 {% endif %}
 
 <div class="grid grid-2">
-  <div class="card">
+  <div class="card" id="overview">
     <h2>Overview</h2>
     <dl class="kv">
       <dt>Application ID</dt><dd>{{ application.id }}</dd>
@@ -23,7 +64,16 @@
       <dt>Created At</dt><dd>{{ application.created_at }}</dd>
       <dt>Started At</dt><dd>{{ application.started_at or '—' }}</dd>
       <dt>Submitted At</dt><dd>{{ application.submitted_at or '—' }}</dd>
+      <dt>Current Step</dt><dd>{{ current_step_label or '—' }}</dd>
+      {% if run %}
+      <dt>Run ID</dt><dd>{{ run.id }}</dd>
+      <dt>Batch Position</dt><dd>{{ run.position }} of {{ run.total }}</dd>
+      <dt>Submission Policy</dt><dd>{{ run.submission_policy }}</dd>
+      {% endif %}
     </dl>
+    {% if run %}
+    <p style="margin-top:0.75rem;"><a href="{{ url_for('run_progress_view', run_id=run.id) }}" class="btn secondary">View Run Progress</a></p>
+    {% endif %}
   </div>
   <div class="card">
     <h2>Progress</h2>
@@ -32,21 +82,21 @@
       <li class="{{ 'done' if step.done }}"><span class="dot"></span>{{ step.label }}</li>
       {% endfor %}
     </ul>
-    {% if application.status == 'NEEDS_INPUT' %}
-    <p class="muted" style="margin-top:0.75rem;">Stopped awaiting human input — see Interventions below.</p>
+    {% if display_status == 'NEEDS_INPUT' %}
+    <p class="muted" style="margin-top:0.75rem;">Stopped awaiting human input — see above.</p>
     {% endif %}
   </div>
 </div>
 
-{% if application.status == 'SUBMITTED' and application.verification_evidence %}
+{% if display_status == 'SUBMITTED' and application.verification_evidence %}
 <div class="card">
-  <div class="banner-success">✅ Submission positively verified by Dice</div>
   <h2>Verification Evidence</h2>
   <dl class="kv">
     <dt>Result</dt><dd><span class="badge green">VERIFIED_SUBMITTED</span></dd>
     <dt>Confirmation</dt><dd>{{ application.verification_evidence.confirmation_text or '—' }}</dd>
     <dt>Before URL</dt><dd><a href="{{ application.verification_evidence.before_url }}" target="_blank" rel="noopener">{{ application.verification_evidence.before_url }}</a></dd>
     <dt>After URL</dt><dd><a href="{{ application.verification_evidence.after_url }}" target="_blank" rel="noopener">{{ application.verification_evidence.after_url }}</a></dd>
+    <dt>Submitted At</dt><dd>{{ application.submitted_at }}</dd>
     <dt>Verified At</dt><dd>{{ application.submitted_at }}</dd>
     <dt>Evidence Source</dt><dd>Dice confirmation page</dd>
   </dl>
@@ -83,6 +133,8 @@
     </tr>
     {% endfor %}
   </table>
+  {% elif display_status == 'QUEUED' %}
+  <p class="empty">Waiting for worker activity. Events will appear here once processing begins.</p>
   {% else %}
   <p class="empty">No events recorded.</p>
   {% endif %}

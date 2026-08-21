@@ -264,17 +264,11 @@ def application_detail_view(application_id):
     if detail is None and not error:
         error = "Application not found."
     if detail is None:
-        return render_template("application_detail.html", active="applications", error=error, application={}, job={}, events=[], interventions=[], timeline=[])
-    return render_template(
-        "application_detail.html",
-        active="applications",
-        error=None,
-        application=detail["application"],
-        job=detail["job"],
-        events=detail["events"],
-        interventions=detail["interventions"],
-        timeline=detail["timeline"],
-    )
+        return render_template(
+            "application_detail.html", active="applications", error=error, application={}, job={}, events=[],
+            interventions=[], open_interventions=[], timeline=[], display_status=None, current_step_label=None, run=None,
+        )
+    return render_template("application_detail.html", active="applications", error=None, **detail)
 
 
 @app.route("/applications/<application_id>/resume", methods=["POST"])

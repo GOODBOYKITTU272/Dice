@@ -9,12 +9,15 @@ from __future__ import annotations
 
 from typing import Any
 
+import run_registry
+
 # applications.status values that represent "actively being worked" for
 # the Worker/Dashboard "current job" widgets.
 _RUNNING_STATUSES = ("PROCESSING", "SUBMITTING")
 _FAILED_STATUSES = ("FAILED", "FAILED_RETRYABLE")
 
 _TIMELINE_STEPS = (
+    ("JOB_QUEUED", "Job queued"),
     ("APPLICATION_CLAIMED", "Job claimed"),
     ("LIVE_QUALIFICATION_PASSED", "Live qualification"),
     ("AUTH_ACTIVE", "Authentication"),
@@ -203,34 +206,76 @@ def application_detail(client, application_id: str) -> dict[str, Any] | None:
         .data
     )
     interventions = (
-        client.table("interventions").select("*").eq("application_id", application_id).execute().data
+        client.table("interventions")
+        .select("*")
+        .eq("application_id", application_id)
+        .order("created_at", desc=True)
+        .execute()
+        .data
     )
+    open_interventions = [iv for iv in interventions if iv["status"] == "OPEN"]
+    open_intervention_id = open_interventions[0]["id"] if open_interventions else None
+    display_status = _display_status(application["status"], open_intervention_id)
+
     event_types = {e["event_type"] for e in events}
-    completed_steps = {_EVENT_TYPE_TO_STEP[t] for t in event_types if t in _EVENT_TYPE_TO_STEP}
-    if application["status"] in ("PROCESSING", "SUBMITTING", "SUBMITTED", "NEEDS_INPUT"):
+    completed_steps = {"JOB_QUEUED"}  # true the instant the row exists, regardless of anything else
+    # Nothing past "queued" is ever marked done for a QUEUED application --
+    # it hasn't been claimed yet, so none of these steps have happened,
+    # no matter what a stale/leftover event might otherwise suggest.
+    if application["status"] != "QUEUED":
         completed_steps.add("APPLICATION_CLAIMED")
         completed_steps.add("LIVE_QUALIFICATION_PASSED")
         completed_steps.add("AUTH_ACTIVE")
-    # No dedicated event exists for "resume already on file" (only an
-    # actual re-upload logs one) or for the raw Submit click itself (only
-    # its classified result is logged) -- both are still knowable from
-    # what DID get logged, so inferred here rather than left as a false
-    # "not done" for a step that genuinely happened.
-    if event_types & {"awaiting_submit_confirmation", "submission_result", "needs_input", "answer_filled_from_resolved_intervention", "answer_auto_filled"}:
-        completed_steps.add("RESUME_READY")
-        completed_steps.add("QUESTIONS_CHECKED")
-    if "submission_result" in event_types:
-        completed_steps.add("SUBMIT_ATTEMPTED")
+        completed_steps |= {_EVENT_TYPE_TO_STEP[t] for t in event_types if t in _EVENT_TYPE_TO_STEP}
+        # No dedicated event exists for "resume already on file" (only an
+        # actual re-upload logs one) or for the raw Submit click itself
+        # (only its classified result is logged) -- both are still knowable
+        # from what DID get logged, so inferred here rather than left as a
+        # false "not done" for a step that genuinely happened.
+        if event_types & {"awaiting_submit_confirmation", "submission_result", "needs_input", "answer_filled_from_resolved_intervention", "answer_auto_filled"}:
+            completed_steps.add("RESUME_READY")
+            completed_steps.add("QUESTIONS_CHECKED")
+        if "submission_result" in event_types:
+            completed_steps.add("SUBMIT_ATTEMPTED")
     if application["status"] != "SUBMITTED":
         completed_steps.discard("SUBMISSION_VERIFIED")
     timeline = [{"step": step, "label": label, "done": step in completed_steps} for step, label in _TIMELINE_STEPS]
+
+    latest_event = events[-1] if events else None
+    current_step_label = _current_step_label(latest_event, application["status"])
+
+    run_info = None
+    run_id = application.get("run_id")
+    if run_id:
+        try:
+            run = run_registry.get_run(run_id)
+        except run_registry.RunNotFoundError:
+            run = None
+        if run is not None:
+            ids = run["application_ids"]
+            position = ids.index(application_id) + 1 if application_id in ids else None
+            run_info = {
+                "id": run["id"],
+                "status": run["status"],
+                "position": position,
+                "total": len(ids),
+                # No per-run policy override exists anywhere in this
+                # project -- every worker launched through the Jobs
+                # selection flow uses this fixed default (dice_browser.
+                # worker.SubmissionPolicy.REQUIRE_CONFIRMATION).
+                "submission_policy": "REQUIRE_CONFIRMATION",
+            }
 
     return {
         "application": application,
         "job": job,
         "events": events,
         "interventions": interventions,
+        "open_interventions": open_interventions,
         "timeline": timeline,
+        "display_status": display_status,
+        "current_step_label": current_step_label,
+        "run": run_info,
     }
 
 
@@ -351,7 +396,9 @@ def failure_reason(application: dict[str, Any]) -> str:
 # ── Run Progress (Jobs selection -> worker) ───────────────────────────────
 
 
-def _current_step_label(latest_event: dict[str, Any] | None) -> str:
+def _current_step_label(latest_event: dict[str, Any] | None, status: str | None = None) -> str:
+    if status == "QUEUED":
+        return "Waiting to start"
     if latest_event is None:
         return "Live Qualification"
     step = _EVENT_TYPE_TO_STEP.get(latest_event["event_type"])
@@ -359,6 +406,36 @@ def _current_step_label(latest_event: dict[str, Any] | None) -> str:
         if key == step:
             return label
     return latest_event["event_type"]
+
+
+def _display_status(status: str, open_intervention_id: str | None) -> str:
+    """applications.status has no AWAITING_SUBMIT_CONFIRMATION value of its
+    own (it's stored as NEEDS_INPUT -- see worker.py's _gate_and_maybe_submit
+    -- specifically so it doesn't block a sibling claim). Computed here
+    purely for display so the UI can tell "reached Review, awaiting your
+    Submit" apart from "genuinely blocked on an unanswerable question"
+    without a schema change. Shared by run_progress() and
+    application_detail() so both pages agree on the same vocabulary."""
+    if status == "NEEDS_INPUT" and open_intervention_id is None:
+        return "AWAITING_SUBMIT_CONFIRMATION"
+    if status in _RUNNING_STATUSES:
+        return "RUNNING"
+    return status
+
+
+def _open_intervention_id(client, application_id: str, status: str) -> str | None:
+    if status != "NEEDS_INPUT":
+        return None
+    open_rows = (
+        client.table("interventions")
+        .select("id")
+        .eq("application_id", application_id)
+        .eq("status", "OPEN")
+        .limit(1)
+        .execute()
+        .data
+    )
+    return open_rows[0]["id"] if open_rows else None
 
 
 def run_progress(client, run: dict[str, Any]) -> dict[str, Any]:
@@ -378,37 +455,14 @@ def run_progress(client, run: dict[str, Any]) -> dict[str, Any]:
             continue
         job = _job_by_id(client, application.get("dice_job_id"))
         latest_event = _latest_event(client, application_id)
-        open_intervention_id = None
-        if application["status"] == "NEEDS_INPUT":
-            open_rows = (
-                client.table("interventions")
-                .select("id")
-                .eq("application_id", application_id)
-                .eq("status", "OPEN")
-                .limit(1)
-                .execute()
-                .data
-            )
-            open_intervention_id = open_rows[0]["id"] if open_rows else None
-
-        # applications.status has no AWAITING_SUBMIT_CONFIRMATION value of
-        # its own (it's stored as NEEDS_INPUT -- see worker.py's
-        # _gate_and_maybe_submit -- specifically so it doesn't block a
-        # sibling claim) -- computed here purely for display so the UI can
-        # tell "reached Review, awaiting your Submit" apart from "genuinely
-        # blocked on an unanswerable question" without a schema change.
-        if application["status"] == "NEEDS_INPUT" and open_intervention_id is None:
-            display_status = "AWAITING_SUBMIT_CONFIRMATION"
-        elif application["status"] in _RUNNING_STATUSES:
-            display_status = "RUNNING"
-        else:
-            display_status = application["status"]
+        open_intervention_id = _open_intervention_id(client, application_id, application["status"])
+        display_status = _display_status(application["status"], open_intervention_id)
 
         rows.append(
             {
                 **application,
                 "job": job,
-                "current_step_label": _current_step_label(latest_event),
+                "current_step_label": _current_step_label(latest_event, application["status"]),
                 "open_intervention_id": open_intervention_id,
                 "display_status": display_status,
             }

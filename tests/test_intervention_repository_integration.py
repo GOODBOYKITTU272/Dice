@@ -9,22 +9,51 @@ Never touches Dice.com -- this is Supabase-only, internal/test data.
 """
 import uuid
 
+import pytest
+
 from db.application_repository import enqueue_application, get_application, update_application_status, upsert_dice_job
 from db.intervention_repository import ApplicationReadiness, compute_application_readiness, create_or_get_question_intervention, resolve_question_intervention
+from db.supabase_client import get_supabase_client
 
 ONSITE_QUESTION_ID = "c59c9cd9-8441-4610-8e13-2621ae1669c2"
 ONSITE_PROMPT = "Are you able and willing to regularly come into the office to work?"
 
+_created_job_ids = []
+
 
 def _make_test_job():
     dice_job_id = f"TEST-{uuid.uuid4()}"
-    return upsert_dice_job(
+    job = upsert_dice_job(
         {
             "dice_job_id": dice_job_id,
             "canonical_url": f"https://dice.com/job/{dice_job_id}",
             "title": "Phase 4F Integration Test Role",
         }
     )
+    _created_job_ids.append(job["id"])
+    return job
+
+
+def _cleanup(job_id: str):
+    client = get_supabase_client()
+    apps = client.table("applications").select("id").eq("dice_job_id", job_id).execute().data
+    for a in apps:
+        aid = a["id"]
+        for iv in client.table("interventions").select("id").eq("application_id", aid).execute().data:
+            client.table("interventions").delete().eq("id", iv["id"]).execute()
+        for ev in client.table("application_events").select("id").eq("application_id", aid).execute().data:
+            client.table("application_events").delete().eq("id", ev["id"]).execute()
+        client.table("applications").delete().eq("id", aid).execute()
+    client.table("dice_jobs").delete().eq("id", job_id).execute()
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_created_jobs():
+    try:
+        yield
+    finally:
+        while _created_job_ids:
+            _cleanup(_created_job_ids.pop())
 
 
 def test_needs_input_resolved_resumable_end_to_end(live_client):
