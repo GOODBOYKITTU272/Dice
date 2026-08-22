@@ -38,10 +38,12 @@ from local_app import browser_check, queries  # noqa: E402
 
 app = Flask(__name__)
 app.jinja_env.globals["failure_reason"] = queries.failure_reason
+app.jinja_env.globals["submission_policy_label"] = queries.submission_policy_label
 
 DEFAULT_ROLE = "Software Engineer"
 DEFAULT_MAX_RESULTS = 5
 CANDIDATE_ID_ENV_VAR = "DICEPILOT_CANDIDATE_ID"
+SUBMISSION_MODE_ENV_VAR = "DICEPILOT_SUBMISSION_MODE"
 _RESUME_PATH = str(Path(__file__).resolve().parent.parent / ".runtime" / "resume" / "test_resume.pdf")
 
 
@@ -51,6 +53,17 @@ def _authorized_candidate_id() -> str | None:
     and refuse to enqueue/start a worker run, never fall back to a
     guessed or historical id."""
     return os.environ.get(CANDIDATE_ID_ENV_VAR)
+
+
+def _resolved_submission_policy() -> str:
+    """This private, single-user DicePilot's intended normal mode is
+    fully automatic submission -- every run created through the normal
+    UI flow gets AUTHORIZED_AUTONOMOUS unless DICEPILOT_SUBMISSION_MODE
+    is explicitly set to REQUIRE_CONFIRMATION (a debugging/manual-review
+    escape hatch). Resolved once, at the moment a run is created, and
+    persisted onto that run -- changing this env var later never mutates
+    an already-created run's stored policy."""
+    return "REQUIRE_CONFIRMATION" if os.environ.get(SUBMISSION_MODE_ENV_VAR) == "REQUIRE_CONFIRMATION" else "AUTHORIZED_AUTONOMOUS"
 
 
 def _client_or_none():
@@ -128,7 +141,9 @@ def jobs_review():
         "likely": sum(1 for r in rows if r["c2c_status"] == "LIKELY"),
         "easy_apply": sum(1 for r in rows if r["is_easy_apply"]),
     }
-    return render_template("jobs_review.html", active="jobs", jobs=rows, counts=counts, error=error)
+    return render_template(
+        "jobs_review.html", active="jobs", jobs=rows, counts=counts, error=error, submission_policy=_resolved_submission_policy()
+    )
 
 
 @app.route("/jobs/apply", methods=["POST"])
@@ -169,7 +184,7 @@ def jobs_apply():
     if not queued_application_ids:
         return redirect(url_for("applications", no_eligible_jobs=1))
 
-    run = run_registry.create_run(queued_application_ids, candidate_id=candidate_id)
+    run = run_registry.create_run(queued_application_ids, candidate_id=candidate_id, submission_policy=_resolved_submission_policy())
     return redirect(url_for("run_progress_view", run_id=run["id"]))
 
 

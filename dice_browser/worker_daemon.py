@@ -47,13 +47,23 @@ def run_daemon(
     worker_id: str,
     cdp_url: str = "http://127.0.0.1:9333",
     resume_path: str | None = None,
-    submission_policy: SubmissionPolicy = SubmissionPolicy.REQUIRE_CONFIRMATION,
+    submission_policy_override: SubmissionPolicy | None = None,
     poll_interval: float = DEFAULT_POLL_INTERVAL_SECONDS,
     max_iterations: int | None = None,
 ) -> None:
     """Heartbeat, then claim-and-process, forever. `max_iterations`
     bounds the loop for tests -- production callers (main()) never pass
-    it, so the daemon really does run until killed."""
+    it, so the daemon really does run until killed.
+
+    Submission policy belongs to the RUN, not to this process: each
+    claimed run's own persisted submission_policy is what actually gets
+    used, since one long-running daemon may claim many runs over its
+    lifetime with different policies. submission_policy_override exists
+    only as an explicit development/debug escape hatch -- normal
+    production operation should never pass it, and doing so applies the
+    same override to every run this invocation ever claims (a deliberate
+    choice for a debug session, never a substitute for a run's own
+    stored policy)."""
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
         iterations += 1
@@ -63,6 +73,8 @@ def run_daemon(
             run_registry.write_heartbeat(worker_id, status="ONLINE")
             time.sleep(poll_interval)
             continue
+
+        policy = submission_policy_override or SubmissionPolicy(run["submission_policy"])
 
         try:
             playwright, page = _connect(cdp_url)
@@ -77,7 +89,7 @@ def run_daemon(
 
         run_registry.write_heartbeat(worker_id, status="ONLINE")
         try:
-            run_worker_for_run(page, run["id"], worker_id, submission_policy=submission_policy, resume_path=resume_path)
+            run_worker_for_run(page, run["id"], worker_id, submission_policy=policy, resume_path=resume_path)
         finally:
             playwright.stop()
 
@@ -97,8 +109,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--submission-policy",
         choices=[p.value for p in SubmissionPolicy],
-        default=SubmissionPolicy.REQUIRE_CONFIRMATION.value,
-        help="REQUIRE_CONFIRMATION (default) stops at Review; AUTHORIZED_AUTONOMOUS also clicks Submit",
+        default=None,
+        help=(
+            "Development/debug override only -- applies to every run this invocation claims, "
+            "ignoring each run's own stored policy. Normal operation should omit this entirely; "
+            "each run's persisted submission_policy (set when it was created) is used by default."
+        ),
     )
     return parser
 
@@ -106,12 +122,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     worker_id = f"worker-{uuid.uuid4()}"
+    override = SubmissionPolicy(args.submission_policy) if args.submission_policy else None
     print(f"DicePilot worker daemon starting -- worker_id={worker_id}, cdp_url={args.cdp_url}")
+    if override:
+        print(f"WARNING: --submission-policy {override.value} overrides every claimed run's own stored policy (debug only)")
     run_daemon(
         worker_id,
         cdp_url=args.cdp_url,
         resume_path=args.resume_path,
-        submission_policy=SubmissionPolicy(args.submission_policy),
+        submission_policy_override=override,
         poll_interval=args.poll_interval,
     )
     return 0

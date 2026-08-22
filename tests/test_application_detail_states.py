@@ -197,7 +197,7 @@ def test_run_link_renders_when_application_belongs_to_a_run():
         assert "Batch Position" in body
         assert "1 of 1" in body
         assert "Submission Policy" in body
-        assert "REQUIRE_CONFIRMATION" in body
+        assert "Auto Submit" in body  # human label for the default AUTHORIZED_AUTONOMOUS policy
     finally:
         _cleanup(job["id"])
 

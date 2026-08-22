@@ -12,6 +12,8 @@
   Run Status:
   <span class="badge {{ 'blue' if progress.run.status in ('PENDING','RUNNING') else ('green' if progress.run.status == 'COMPLETE' else '') }}">{{ progress.run.status }}</span>
   &nbsp;&middot;&nbsp;
+  Submission Policy: {{ submission_policy_label(progress.run.submission_policy) }}
+  &nbsp;&middot;&nbsp;
   Worker:
   <span class="badge {{ 'green' if progress.worker.online else 'red' }}">{{ 'ONLINE' if progress.worker.online else 'OFFLINE' }}</span>
   {% if progress.worker.last_heartbeat_at %}

@@ -60,6 +60,14 @@
 </div>
 
 <div class="card">
+  <p class="subtitle" style="margin-bottom:0.5rem;">
+    Submission Mode: <span class="badge {{ 'green' if submission_policy == 'AUTHORIZED_AUTONOMOUS' else 'amber' }}">{{ submission_policy_label(submission_policy) }}</span>
+  </p>
+  {% if submission_policy == 'AUTHORIZED_AUTONOMOUS' %}
+  <p class="muted" style="font-size:0.85rem;">DicePilot will submit eligible applications automatically after all safety checks pass.</p>
+  {% else %}
+  <p class="muted" style="font-size:0.85rem;">DicePilot will stop at Review for your confirmation before submitting each application.</p>
+  {% endif %}
   <form method="post" action="{{ url_for('jobs_apply') }}">
     {% for job in jobs %}
     <input type="hidden" name="job_id" value="{{ job.id }}">

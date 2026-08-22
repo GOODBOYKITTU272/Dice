@@ -259,11 +259,7 @@ def application_detail(client, application_id: str) -> dict[str, Any] | None:
                 "status": run["status"],
                 "position": position,
                 "total": len(ids),
-                # No per-run policy override exists anywhere in this
-                # project -- every worker launched through the Jobs
-                # selection flow uses this fixed default (dice_browser.
-                # worker.SubmissionPolicy.REQUIRE_CONFIRMATION).
-                "submission_policy": "REQUIRE_CONFIRMATION",
+                "submission_policy": run["submission_policy"],
             }
 
     return {
@@ -391,6 +387,16 @@ def failure_reason(application: dict[str, Any]) -> str:
     if not code:
         return application.get("error_message") or "No reason recorded."
     return FAILURE_REASON_TEXT.get(code, application.get("error_message") or code)
+
+
+SUBMISSION_POLICY_LABELS = {
+    "AUTHORIZED_AUTONOMOUS": "Auto Submit",
+    "REQUIRE_CONFIRMATION": "Final Confirmation Required",
+}
+
+
+def submission_policy_label(policy: str) -> str:
+    return SUBMISSION_POLICY_LABELS.get(policy, policy)
 
 
 # ── Run Progress (Jobs selection -> worker) ───────────────────────────────

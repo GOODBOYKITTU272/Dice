@@ -68,7 +68,7 @@
       {% if run %}
       <dt>Run ID</dt><dd>{{ run.id }}</dd>
       <dt>Batch Position</dt><dd>{{ run.position }} of {{ run.total }}</dd>
-      <dt>Submission Policy</dt><dd>{{ run.submission_policy }}</dd>
+      <dt>Submission Policy</dt><dd>{{ submission_policy_label(run.submission_policy) }}</dd>
       {% endif %}
     </dl>
     {% if run %}

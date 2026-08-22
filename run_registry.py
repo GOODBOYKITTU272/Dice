@@ -28,12 +28,23 @@ class RunNotFoundError(RuntimeError):
     pass
 
 
-def create_run(application_ids: list[str], candidate_id: str) -> dict[str, Any]:
+def create_run(application_ids: list[str], candidate_id: str, submission_policy: str = "AUTHORIZED_AUTONOMOUS") -> dict[str, Any]:
     """One run per "Start Applications" click. Inserts the run row
     PENDING, then stamps run_id onto exactly the given (already-enqueued)
-    application rows -- callers enqueue first, then create_run()."""
+    application rows -- callers enqueue first, then create_run().
+
+    submission_policy is resolved and persisted onto the run at creation
+    time -- the daemon reads it per-run (never a CLI-wide default), and
+    it never changes after creation (a later Settings change or a Resume
+    Run click cannot retroactively alter an already-created run's
+    policy)."""
     client = get_supabase_client()
-    run_row = client.table("application_runs").insert({"candidate_id": candidate_id, "status": "PENDING"}).execute().data[0]
+    run_row = (
+        client.table("application_runs")
+        .insert({"candidate_id": candidate_id, "status": "PENDING", "submission_policy": submission_policy})
+        .execute()
+        .data[0]
+    )
     if application_ids:
         client.table("applications").update({"run_id": run_row["id"]}).in_("id", application_ids).execute()
     return _to_run_dict(run_row, application_ids)
@@ -165,6 +176,7 @@ def _to_run_dict(run_row: dict[str, Any], application_ids: list[str]) -> dict[st
         "stop_requested": run_row.get("stop_requested", False),
         "claimed_by": run_row.get("claimed_by"),
         "claimed_at": run_row.get("claimed_at"),
+        "submission_policy": run_row.get("submission_policy", "REQUIRE_CONFIRMATION"),
         "application_ids": application_ids,
         "created_at": run_row["created_at"],
         "updated_at": run_row["updated_at"],

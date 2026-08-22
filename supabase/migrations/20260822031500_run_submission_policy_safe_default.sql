@@ -1,0 +1,24 @@
+-- Phase 6.4 follow-up, live-found 2026-08-22: the previous migration
+-- (20260822030000) gave application_runs.submission_policy a DEFAULT of
+-- AUTHORIZED_AUTONOMOUS. That's the right value for run_registry.
+-- create_run()'s own Python-level default once the updated app.py is
+-- actually deployed and calling it explicitly -- but it's the WRONG
+-- value as a bare database column default, because it silently applies
+-- to ANY insert that doesn't specify the column, including code that
+-- has no idea this column exists yet.
+--
+-- This happened for real: the migration was applied to this shared
+-- Supabase project before the corresponding app.py/run_registry.py
+-- changes were deployed. In that window, a real run (3 real jobs)
+-- created through the still-old deployed code got AUTHORIZED_AUTONOMOUS
+-- from the column default alone, while the still-old deployed UI kept
+-- displaying its own hardcoded "REQUIRE_CONFIRMATION" label -- a real
+-- mismatch between what the page told the user and what a worker would
+-- have actually done.
+--
+-- The column default now matches the historically-safe behavior
+-- (REQUIRE_CONFIRMATION); AUTHORIZED_AUTONOMOUS becomes the normal mode
+-- only through updated application code explicitly choosing it, never
+-- as a silent fallback for code that doesn't know better.
+
+alter table application_runs alter column submission_policy set default 'REQUIRE_CONFIRMATION';

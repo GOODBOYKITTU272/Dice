@@ -182,7 +182,7 @@ def test_run_preserves_selection_order():
 # queued_application_for_run's tests in test_worker_run.py.
 def test_daemon_claims_and_processes_exactly_one_run_per_poll(monkeypatch):
     worker_id = f"TEST-worker-{uuid.uuid4()}"
-    fake_run = {"id": "TEST-fake-run-1", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": []}
+    fake_run = {"id": "TEST-fake-run-1", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": [], "submission_policy": "REQUIRE_CONFIRMATION"}
     claim_calls = []
 
     def _fake_claim(wid):
@@ -236,7 +236,7 @@ def test_worker_offline_detected_when_heartbeat_stale():
 # for why this must never touch the shared live application_runs table.
 def test_daemon_reports_browser_disconnected_and_hands_run_back_to_pending(monkeypatch):
     worker_id = f"TEST-worker-{uuid.uuid4()}"
-    fake_run = {"id": "TEST-fake-run-2", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": []}
+    fake_run = {"id": "TEST-fake-run-2", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": [], "submission_policy": "REQUIRE_CONFIRMATION"}
     status_updates = []
 
     def _boom(cdp_url):
@@ -332,8 +332,8 @@ def test_daemon_restart_across_two_separate_invocations_is_safe(monkeypatch):
     worker_id_1 = f"TEST-worker-{uuid.uuid4()}"
     worker_id_2 = f"TEST-worker-{uuid.uuid4()}"
     queue = [
-        {"id": "TEST-fake-run-restart-1", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": []},
-        {"id": "TEST-fake-run-restart-2", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": []},
+        {"id": "TEST-fake-run-restart-1", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": [], "submission_policy": "REQUIRE_CONFIRMATION"},
+        {"id": "TEST-fake-run-restart-2", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": [], "submission_policy": "REQUIRE_CONFIRMATION"},
     ]
 
     def _fake_claim(wid):
