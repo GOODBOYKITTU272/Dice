@@ -17,10 +17,22 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright
 from dice_browser.models import BrowserState, ChallengeType
 
 DEFAULT_PROFILE_ROOT = Path(__file__).resolve().parent.parent / ".runtime" / "browser_profiles"
+BROWSER_PROFILE_DIR_ENV_VAR = "DICEPILOT_BROWSER_PROFILE_DIR"
 
 
-def profile_dir_for(profile_id: str, root: Path = DEFAULT_PROFILE_ROOT) -> Path:
-    return root / profile_id
+def profile_root() -> Path:
+    """DICEPILOT_BROWSER_PROFILE_DIR overrides the default local
+    (.runtime/browser_profiles) location -- a cloud deployment points
+    this at a durable disk path (e.g. /opt/dicepilot/browser-profile) so
+    the persistent Chromium profile survives worker restarts and VM
+    reboots, never at ephemeral /tmp. Read at call time, not import time,
+    so tests can override the env var per-test."""
+    override = os.environ.get(BROWSER_PROFILE_DIR_ENV_VAR)
+    return Path(override) if override else DEFAULT_PROFILE_ROOT
+
+
+def profile_dir_for(profile_id: str, root: Path | None = None) -> Path:
+    return (root if root is not None else profile_root()) / profile_id
 
 
 class ProfileInUseError(RuntimeError):

@@ -8,11 +8,14 @@
   <h2>Connection</h2>
   <dl class="kv">
     <dt>Browser Profile</dt><dd>dice-persistent-1</dd>
-    <dt>CDP Connection</dt><dd>{{ cdp_url }}</dd>
     <dt>Connection Status</dt><dd><span class="badge {{ 'green' if connection.connected else 'red' }}">{{ 'Connected' if connection.connected else 'Disconnected' }}</span></dd>
     <dt>Open Tabs</dt><dd>{{ connection.tab_count if connection.connected else '—' }}</dd>
     <dt>Current Dice URL</dt><dd>{{ connection.dice_tab_url or '—' }}</dd>
   </dl>
+  <p class="muted" style="margin-top:0.5rem; font-size:0.8rem;">
+    This page reads the worker's browser over its private network connection -- it never exposes a debugging port to the internet.
+    To view or interact with the browser directly (e.g. to log back into Dice), use the secure operator access procedure in the deployment runbook (deploy/cloud-worker/README.md), never a public link to this connection.
+  </p>
 </div>
 
 <div class="card">
@@ -33,6 +36,5 @@
   <form method="post" action="{{ url_for('browser_session_recheck') }}" style="display:inline;">
     <button class="btn" type="submit">Recheck Session</button>
   </form>
-  <a class="btn secondary" href="{{ cdp_url }}/json" target="_blank" rel="noopener">Open Dice Browser (CDP inspector)</a>
 </div>
 {% endblock %}

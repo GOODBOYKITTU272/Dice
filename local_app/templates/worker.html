@@ -2,37 +2,58 @@
 {% block title %}Worker{% endblock %}
 {% block content %}
 <h1>Worker</h1>
-<p class="subtitle">Operational control for the standalone sequential self-apply worker.</p>
+<p class="subtitle">Live status of the persistent DicePilot worker. Runs continuously against the authenticated Dice browser -- no terminal needed for normal operation.</p>
 
 {% if error %}<div class="error">{{ error }}</div>{% else %}
 
 <div class="grid grid-2">
   <div class="card">
-    <h2>Status</h2>
+    <h2>Cloud Worker</h2>
     <dl class="kv">
-      <dt>Status</dt><dd><span class="badge {{ 'green' if status.status == 'RUNNING' else 'blue' }}">{{ status.status }}</span></dd>
-      <dt>Submission Policy</dt><dd><span class="badge amber">REQUIRE_CONFIRMATION</span> (default — reaching Review never triggers Submit by itself)</dd>
-      <dt>Current Application</dt><dd>{% if status.current_application %}<a href="{{ url_for('application_detail_view', application_id=status.current_application.id) }}">{{ status.current_job.title }}</a>{% else %}none{% endif %}</dd>
+      <dt>Worker</dt><dd><span class="badge {{ 'green' if worker.online else 'red' }}">{{ 'ONLINE' if worker.online else 'OFFLINE' }}</span></dd>
+      <dt>Browser / Dice Login</dt>
+      <dd>
+        {% if not worker.online %}
+        <span class="badge red">Unknown (worker offline)</span>
+        {% else %}
+        <span class="badge {{ 'green' if worker.status == 'ONLINE' else 'red' }}">{{ worker_status_label(worker.status) }}</span>
+        {% endif %}
+      </dd>
+      <dt>Last Heartbeat</dt>
+      <dd>{% if worker.last_heartbeat_at %}{{ worker.age_seconds|round|int }}s ago{% else %}never{% endif %}</dd>
     </dl>
+    {% if worker.online and worker.status in ('AUTH_REQUIRED', 'SECURITY_CHALLENGE') %}
+    <p class="muted" style="margin-top:0.5rem;">
+      {% if worker.status == 'AUTH_REQUIRED' %}The Dice session has logged out.{% else %}Dice is showing a security challenge.{% endif %}
+      An operator needs to resolve this directly in the worker's browser (see the deployment runbook for the secure remote-access procedure), then it clears on its own within a minute.
+    </p>
+    <a class="btn secondary" href="{{ url_for('browser_session_view') }}">Recheck Session</a>
+    {% endif %}
   </div>
   <div class="card">
-    <h2>Run statistics</h2>
+    <h2>Current Run</h2>
+    {% if status.current_run %}
     <dl class="kv">
-      <dt>Submitted</dt><dd>{{ status.counts.submitted }}</dd>
-      <dt>Needs Input</dt><dd>{{ status.counts.needs_input }}</dd>
-      <dt>Failed</dt><dd>{{ status.counts.failed }}</dd>
-      <dt>Running</dt><dd>{{ status.counts.running }}</dd>
+      <dt>Run</dt><dd><a href="{{ url_for('run_progress_view', run_id=status.current_run.id) }}">{{ status.current_run.id }}</a></dd>
+      <dt>Run Status</dt><dd><span class="badge blue">{{ status.current_run.status }}</span></dd>
+      <dt>Submission Mode</dt><dd>{{ submission_policy_label(status.current_run.submission_policy) }}</dd>
+      <dt>Current Job</dt><dd>{% if status.current_job %}{{ status.current_job.title }}{% else %}&mdash;{% endif %}</dd>
+      <dt>Current Step</dt><dd>{{ status.current_step_label or '&mdash;' }}</dd>
     </dl>
+    {% else %}
+    <p class="muted">No run pending or in progress. Start one from <a href="{{ url_for('jobs') }}">Jobs</a>.</p>
+    {% endif %}
   </div>
 </div>
 
 <div class="card">
-  <h2>Controls</h2>
-  <p class="muted">The worker runs as a standalone process against the already-authenticated Dice browser — this page does not drive Playwright itself. Use the CLI directly:</p>
-  <pre style="background:#0d1420; padding:0.75rem 1rem; border-radius:0.375rem; overflow-x:auto; font-size:0.8rem;">.venv/bin/python -m dice_browser.worker --candidate-id &lt;candidate_id&gt; --max-applications 1</pre>
-  <button class="btn" disabled title="Run this from your own terminal — see command above">Run 1 Application</button>
-  <button class="btn secondary" disabled>Stop Worker</button>
-  <p class="muted" style="margin-top:0.75rem; font-size:0.8rem;">Batch runs are disabled until Phase 7 is approved. Max applications per run is currently capped at 1.</p>
+  <h2>Run statistics (all time)</h2>
+  <dl class="kv">
+    <dt>Submitted</dt><dd>{{ status.counts.submitted }}</dd>
+    <dt>Needs Input</dt><dd>{{ status.counts.needs_input }}</dd>
+    <dt>Failed</dt><dd>{{ status.counts.failed }}</dd>
+    <dt>Running</dt><dd>{{ status.counts.running }}</dd>
+  </dl>
 </div>
 
 {% endif %}

@@ -355,10 +355,26 @@ def worker_status_summary(client) -> dict[str, Any]:
     running = [a for a in applications if a["status"] in _RUNNING_STATUSES]
     current = running[0] if running else None
     current_job = _job_by_id(client, current["dice_job_id"]) if current else None
+    current_step_label = _current_step_label(_latest_event(client, current["id"]), current["status"]) if current else None
+
+    current_run = None
+    run_id = current.get("run_id") if current else None
+    if run_id is None:
+        # Nothing actively RUNNING right now -- surface the oldest PENDING
+        # run instead (if any), so the operator can see what's waiting.
+        pending = client.table("application_runs").select("id, status, submission_policy").eq("status", "PENDING").order("created_at").limit(1).execute().data
+        if pending:
+            run_id, current_run = pending[0]["id"], pending[0]
+    if run_id and current_run is None:
+        rows = client.table("application_runs").select("id, status, submission_policy").eq("id", run_id).execute().data
+        current_run = rows[0] if rows else None
+
     return {
         "status": "RUNNING" if current else "IDLE",
         "current_application": current,
         "current_job": current_job,
+        "current_step_label": current_step_label,
+        "current_run": current_run,
         "counts": application_counts(applications),
     }
 
@@ -397,6 +413,19 @@ SUBMISSION_POLICY_LABELS = {
 
 def submission_policy_label(policy: str) -> str:
     return SUBMISSION_POLICY_LABELS.get(policy, policy)
+
+
+WORKER_STATUS_LABELS = {
+    "ONLINE": "Online",
+    "BROWSER_DISCONNECTED": "Browser Disconnected",
+    "AUTH_REQUIRED": "Dice Login Required",
+    "SECURITY_CHALLENGE": "Security Challenge",
+    "OFFLINE": "Offline",
+}
+
+
+def worker_status_label(status: str) -> str:
+    return WORKER_STATUS_LABELS.get(status, status)
 
 
 # ── Run Progress (Jobs selection -> worker) ───────────────────────────────

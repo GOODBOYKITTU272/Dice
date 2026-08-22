@@ -15,7 +15,7 @@
   Submission Policy: {{ submission_policy_label(progress.run.submission_policy) }}
   &nbsp;&middot;&nbsp;
   Worker:
-  <span class="badge {{ 'green' if progress.worker.online else 'red' }}">{{ 'ONLINE' if progress.worker.online else 'OFFLINE' }}</span>
+  <span class="badge {{ 'green' if progress.worker.status == 'ONLINE' else ('amber' if progress.worker.online else 'red') }}">{{ worker_status_label(progress.worker.status) }}</span>
   {% if progress.worker.last_heartbeat_at %}
   <span class="muted">(last heartbeat {{ progress.worker.age_seconds|round|int }}s ago)</span>
   {% else %}
@@ -34,6 +34,21 @@
 <div class="card" style="border-left: 4px solid var(--accent);">
   <h2>Waiting for DicePilot worker</h2>
   <p class="muted">DicePilot worker is offline. Applications are queued and will start automatically when the worker reconnects.</p>
+</div>
+{% elif progress.run.status in ('PENDING', 'RUNNING') and progress.worker.status == 'AUTH_REQUIRED' %}
+<div class="card" style="border-left: 4px solid var(--red);">
+  <h2>Dice Login Required</h2>
+  <p class="muted">The worker is online but the Dice session has logged out. Applications will stay queued until an operator logs back in.</p>
+</div>
+{% elif progress.run.status in ('PENDING', 'RUNNING') and progress.worker.status == 'SECURITY_CHALLENGE' %}
+<div class="card" style="border-left: 4px solid var(--red);">
+  <h2>Security Challenge</h2>
+  <p class="muted">Dice is showing a security challenge (CAPTCHA/OTP/verification) in the worker's browser. An operator needs to resolve it manually before applications can continue.</p>
+</div>
+{% elif progress.run.status in ('PENDING', 'RUNNING') and progress.worker.status == 'BROWSER_DISCONNECTED' %}
+<div class="card" style="border-left: 4px solid var(--red);">
+  <h2>Browser Disconnected</h2>
+  <p class="muted">The worker is online but can't reach the browser. Applications will stay queued until the browser is reachable again.</p>
 </div>
 {% endif %}
 

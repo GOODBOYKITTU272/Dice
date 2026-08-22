@@ -1,0 +1,19 @@
+[Unit]
+Description=DicePilot persistent worker (claims Supabase runs, drives Dice applications)
+After=network-online.target dicepilot-browser.service
+Wants=network-online.target
+Requires=dicepilot-browser.service
+
+[Service]
+Type=simple
+User=dicepilot
+WorkingDirectory=/opt/dicepilot/dice
+EnvironmentFile=/opt/dicepilot/dice/.env
+# No --submission-policy: normal production operation reads each run's
+# own persisted policy (Phase 6.4). See README.md before ever adding one.
+ExecStart=/opt/dicepilot/dice/.venv/bin/python -m dice_browser.worker_daemon --poll-interval 5
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

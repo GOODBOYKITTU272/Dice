@@ -145,22 +145,122 @@ def get_latest_heartbeat() -> dict[str, Any] | None:
 
 
 def worker_status(max_age_seconds: int = 30) -> dict[str, Any]:
-    """Used by the Run Progress page. Never assumes a worker is
-    connected just because the web app itself is reachable -- OFFLINE
-    unless a heartbeat row exists AND is fresher than max_age_seconds."""
+    """Used by the Run Progress and Worker pages. Never assumes a worker
+    process is alive just because the web app itself is reachable --
+    "online" means the daemon PROCESS is up and heartbeating, nothing
+    more; it stays True even when the browser/Dice session has a
+    problem, because a fresh AUTH_REQUIRED heartbeat still proves the
+    daemon itself is alive and honestly reporting that problem (as
+    opposed to a stale/absent heartbeat, which means the process itself
+    is gone). status carries the real, specific state -- ONLINE,
+    BROWSER_DISCONNECTED, AUTH_REQUIRED, or SECURITY_CHALLENGE when
+    online, else the synthetic OFFLINE when the heartbeat itself has
+    gone stale or never existed -- so the frontend can show "Dice Login
+    Required" or "Security Challenge" distinctly from a dead worker."""
     hb = get_latest_heartbeat()
     if hb is None:
         return {"online": False, "status": "OFFLINE", "last_heartbeat_at": None, "age_seconds": None}
     last_raw = hb["last_heartbeat_at"]
     last_dt = datetime.fromisoformat(last_raw.replace("Z", "+00:00")) if isinstance(last_raw, str) else last_raw
     age_seconds = (datetime.now(timezone.utc) - last_dt).total_seconds()
-    online = age_seconds <= max_age_seconds and hb["status"] == "ONLINE"
+    online = age_seconds <= max_age_seconds
     return {
         "online": online,
         "status": hb["status"] if online else "OFFLINE",
         "last_heartbeat_at": last_raw,
         "age_seconds": age_seconds,
     }
+
+
+DEFAULT_STALE_LEASE_SECONDS = 90
+
+
+def _worker_heartbeat_is_stale(client, worker_id: str | None, max_age_seconds: int) -> bool:
+    """The lease signal is the CLAIMING WORKER's heartbeat freshness, not
+    claimed_at's raw age -- claimed_at is set once, at claim time, and
+    never touched again while a run is legitimately still being worked
+    through a long batch, so age-since-claim alone would misclassify
+    slow-but-alive work as orphaned. A worker whose heartbeat has gone
+    stale is the actual "crashed" signal."""
+    if not worker_id:
+        return True
+    rows = client.table("worker_heartbeats").select("last_heartbeat_at").eq("worker_id", worker_id).execute().data
+    if not rows:
+        return True
+    last_raw = rows[0]["last_heartbeat_at"]
+    last_dt = datetime.fromisoformat(last_raw.replace("Z", "+00:00")) if isinstance(last_raw, str) else last_raw
+    age_seconds = (datetime.now(timezone.utc) - last_dt).total_seconds()
+    return age_seconds > max_age_seconds
+
+
+def recover_stale_applications(max_heartbeat_age_seconds: int = DEFAULT_STALE_LEASE_SECONDS) -> dict[str, list[str]]:
+    """Startup reconciliation for applications left behind by a worker
+    whose heartbeat has gone stale (crashed mid-application).
+
+    PROCESSING is entirely pre-Submit -- safe to hand straight back to
+    QUEUED so the next daemon poll can pick it up fresh (bypasses
+    STATUS_TRANSITIONS's normal map on purpose: QUEUED is deliberately
+    not a reachable target from PROCESSING through the normal API,
+    since normal code should never "un-claim" an application anyone is
+    actively working -- this is the one narrow, explicit exception,
+    gated on independently-verified worker death, not a general escape
+    hatch).
+
+    SUBMITTING crossed into the actual Submit attempt -- whether the
+    click landed on a since-crashed worker is genuinely unknown, so this
+    NEVER re-queues it automatically (that would risk a second real
+    Submit click against Dice). It lands on FAILED_RETRYABLE with an
+    explicit reason, inert until a human verifies on Dice's own Applied
+    Jobs page and deliberately calls requeue_failed_application()
+    themselves -- this is the "require verification/reconciliation
+    first" the crash-recovery design calls for."""
+    client = get_supabase_client()
+    recovered: dict[str, list[str]] = {"requeued": [], "needs_verification": []}
+
+    processing = client.table("applications").select("id, worker_id").eq("status", "PROCESSING").execute().data
+    for application in processing:
+        if _worker_heartbeat_is_stale(client, application.get("worker_id"), max_heartbeat_age_seconds):
+            client.table("applications").update({"status": "QUEUED", "worker_id": None, "lock_acquired_at": None}).eq(
+                "id", application["id"]
+            ).execute()
+            recovered["requeued"].append(application["id"])
+
+    submitting = client.table("applications").select("id, worker_id").eq("status", "SUBMITTING").execute().data
+    for application in submitting:
+        if _worker_heartbeat_is_stale(client, application.get("worker_id"), max_heartbeat_age_seconds):
+            client.table("applications").update(
+                {
+                    "status": "FAILED_RETRYABLE",
+                    "error_code": "SUBMISSION_UNCERTAIN_AFTER_CRASH",
+                    "error_message": (
+                        "Worker crashed while submitting -- whether Submit was actually clicked is unknown. "
+                        "Verify on Dice's Applied Jobs page before requeuing."
+                    ),
+                }
+            ).eq("id", application["id"]).execute()
+            recovered["needs_verification"].append(application["id"])
+
+    return recovered
+
+
+def recover_orphaned_runs(max_heartbeat_age_seconds: int = DEFAULT_STALE_LEASE_SECONDS) -> list[str]:
+    """Startup reconciliation for a run stuck RUNNING whose claiming
+    worker's heartbeat has gone stale -- handed back to PENDING so a live
+    daemon can reclaim it. Safe regardless of what its individual
+    applications were doing: recover_stale_applications() (called first,
+    same startup pass) already reconciles any PROCESSING/SUBMITTING
+    application left behind, and claim_next_queued_application_for_run
+    only ever claims QUEUED applications going forward."""
+    client = get_supabase_client()
+    running = client.table("application_runs").select("id, claimed_by").eq("status", "RUNNING").execute().data
+    recovered = []
+    for run in running:
+        if _worker_heartbeat_is_stale(client, run.get("claimed_by"), max_heartbeat_age_seconds):
+            client.table("application_runs").update({"status": "PENDING", "claimed_by": None, "claimed_at": None}).eq(
+                "id", run["id"]
+            ).execute()
+            recovered.append(run["id"])
+    return recovered
 
 
 def _application_ids_for_run(client, run_id: str) -> list[str]:

@@ -193,8 +193,9 @@ def test_daemon_claims_and_processes_exactly_one_run_per_poll(monkeypatch):
     monkeypatch.setattr(run_registry, "claim_next_pending_run", _fake_claim)
     monkeypatch.setattr(worker_daemon, "run_worker_for_run", lambda page, run_id, *a, **kw: seen_run_ids.append(run_id))
     monkeypatch.setattr(worker_daemon, "_connect", _fake_connect)
+    monkeypatch.setattr(worker_daemon, "_check_browser_and_auth", lambda cdp_url: "ONLINE")
     try:
-        worker_daemon.run_daemon(worker_id, max_iterations=2, poll_interval=0)
+        worker_daemon.run_daemon(worker_id, max_iterations=2, poll_interval=0, auth_check_interval=0)
         assert claim_calls == [worker_id, worker_id]  # polled twice
         assert seen_run_ids == [fake_run["id"]]  # processed exactly once (second poll found nothing)
     finally:
@@ -205,8 +206,9 @@ def test_daemon_claims_and_processes_exactly_one_run_per_poll(monkeypatch):
 def test_daemon_writes_heartbeat_on_idle_poll(monkeypatch):
     worker_id = f"TEST-worker-{uuid.uuid4()}"
     monkeypatch.setattr(run_registry, "claim_next_pending_run", lambda wid: None)
+    monkeypatch.setattr(worker_daemon, "_check_browser_and_auth", lambda cdp_url: "ONLINE")
     try:
-        worker_daemon.run_daemon(worker_id, max_iterations=1, poll_interval=0)
+        worker_daemon.run_daemon(worker_id, max_iterations=1, poll_interval=0, auth_check_interval=0)
         hb = run_registry.get_latest_heartbeat()
         assert hb["worker_id"] == worker_id
         assert hb["status"] == "ONLINE"

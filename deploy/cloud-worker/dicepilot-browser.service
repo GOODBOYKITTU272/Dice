@@ -1,0 +1,15 @@
+[Unit]
+Description=DicePilot persistent Dice browser (CDP host)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dicepilot
+EnvironmentFile=/opt/dicepilot/dice/.env
+ExecStart=/opt/dicepilot/dice/deploy/cloud-worker/start-browser.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

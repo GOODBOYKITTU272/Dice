@@ -39,6 +39,7 @@ from local_app import browser_check, queries  # noqa: E402
 app = Flask(__name__)
 app.jinja_env.globals["failure_reason"] = queries.failure_reason
 app.jinja_env.globals["submission_policy_label"] = queries.submission_policy_label
+app.jinja_env.globals["worker_status_label"] = queries.worker_status_label
 
 DEFAULT_ROLE = "Software Engineer"
 DEFAULT_MAX_RESULTS = 5
@@ -370,7 +371,8 @@ def events():
 def worker_view():
     client, error = _client_or_none()
     status = queries.worker_status_summary(client) if client else None
-    return render_template("worker.html", active="worker", status=status, error=error)
+    worker = run_registry.worker_status()
+    return render_template("worker.html", active="worker", status=status, worker=worker, error=error)
 
 
 # ── Candidate ────────────────────────────────────────────────────────────
