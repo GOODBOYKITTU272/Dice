@@ -270,7 +270,64 @@ def test_process_one_application_authorized_autonomous_uncertain_never_marks_sub
 
     result = worker.process_one_application(page, CANDIDATE, "test-worker", submission_policy=worker.SubmissionPolicy.AUTHORIZED_AUTONOMOUS)
     assert result.stop_reason == worker.StopReason.VERIFICATION_UNCERTAIN
-    assert app_repo.get_application(app["id"])["status"] != "SUBMITTED"
+    application = app_repo.get_application(app["id"])
+    assert application["status"] != "SUBMITTED"
+    # Regression, live-found 2026-08-22: a non-VERIFIED_SUBMITTED result
+    # used to leave the application stuck at SUBMITTING forever (no valid
+    # transition back to QUEUED from there) -- must land on a real
+    # terminal/retryable status instead.
+    assert application["status"] == "FAILED_RETRYABLE"
+
+
+def test_process_one_application_authorized_autonomous_submit_failed_marks_failed_not_stuck_submitting(fake_intervention_repo, page, monkeypatch):
+    app = _make_queued_application()
+    _patch_happy_path(monkeypatch)
+    monkeypatch.setattr(
+        worker,
+        "submit_application",
+        lambda page, url, app_id, job_id, preconditions, **kw: SubmissionResult(
+            SubmissionStatus.SUBMIT_FAILED, "current page URL does not match the expected application/job", {}, app_id, job_id, url, url
+        ),
+    )
+
+    result = worker.process_one_application(page, CANDIDATE, "test-worker", submission_policy=worker.SubmissionPolicy.AUTHORIZED_AUTONOMOUS)
+    assert result.stop_reason == worker.StopReason.SUBMIT_FAILED
+    application = app_repo.get_application(app["id"])
+    assert application["status"] == "FAILED"
+    assert application["status"] != "SUBMITTING"
+
+
+# Regression, live-found 2026-08-22: the first genuine live exercise of
+# AUTHORIZED_AUTONOMOUS (real CDP browser, real Easy Apply, real Review
+# screen) failed submit_application's own pre-submit URL gate every time
+# -- SUBMIT_FAILED, "current page URL does not match the expected
+# application/job", Submit never even clicked. Root cause: worker.py
+# passed canonical_url (the job-DETAIL page, e.g. .../job-detail/{id}) as
+# submit_application's expected_job_url_fragment, but by Review time the
+# live page is on the wizard URL (.../job-applications/{id}/wizard) --
+# same job id fragment, different path prefix, so the substring check
+# always failed. submit_application's own test suite
+# (test_dice_browser_submission.py, JOB_FRAGMENT = "TESTJOB123" against
+# a .../job-applications/TESTJOB123/wizard page) already modeled the
+# CORRECT contract -- expected_job_url_fragment is just the job id
+# fragment, not the full detail-page URL -- so this was purely a
+# wrong-argument bug in the one caller, invisible to every existing test
+# because they all replace submit_application with a lambda that never
+# inspects its own `url` argument.
+def test_process_one_application_authorized_autonomous_passes_job_id_fragment_not_detail_url(fake_intervention_repo, page, monkeypatch):
+    app = _make_queued_application()  # canonical_url = "https://dice.com/job-detail/DICE-6-1"
+    _patch_happy_path(monkeypatch)
+    captured = {}
+
+    def _fake_submit(page, url, app_id, job_id, preconditions, **kw):
+        captured["url"] = url
+        return SubmissionResult(SubmissionStatus.VERIFIED_SUBMITTED, "ok", {"confirmation_text": "on its way"}, app_id, job_id, url, url + "/success")
+
+    monkeypatch.setattr(worker, "submit_application", _fake_submit)
+
+    worker.process_one_application(page, CANDIDATE, "test-worker", submission_policy=worker.SubmissionPolicy.AUTHORIZED_AUTONOMOUS)
+
+    assert captured["url"] == "DICE-6-1"  # the fragment that actually appears in the wizard URL, not the job-detail page
 
 
 # ── run_worker: sequencing + circuit breaker ──────────────────────────────

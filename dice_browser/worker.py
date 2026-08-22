@@ -254,13 +254,43 @@ def _gate_and_maybe_submit(
 
 
 def _submit_with_verification(page: Page, application_id: str, dice_job_id: str, canonical_url: str) -> ApplicationRunResult:
-    """AUTHORIZED_AUTONOMOUS path -- architected, not exercised live as
-    of Phase 6's creation. Never retries: whatever submit_application()
-    classifies is recorded once and this function returns."""
+    """AUTHORIZED_AUTONOMOUS path. Never retries: whatever
+    submit_application() classifies is recorded once and this function
+    returns.
+
+    Regression, live-found 2026-08-22 (first genuine live exercise of
+    this path): submit_application's expected_job_url_fragment must be
+    the job id fragment that actually appears in the live wizard URL
+    (.../job-applications/{fragment}/wizard) -- passing canonical_url
+    (the job-DETAIL page, .../job-detail/{fragment}) whole made its own
+    pre-submit URL gate fail every time, since "job-detail" !=
+    "job-applications" even though both contain the same fragment.
+    canonical_url's own last path segment (validate_canonical_url
+    guarantees the /job-detail/{fragment} shape) is that fragment."""
     update_application_status(application_id, "SUBMITTING")
     preconditions = SubmitPreconditions(authenticated=True, no_unresolved_interventions=True, already_verified_submitted=False)
-    result = submit_application(page, canonical_url, application_id, dice_job_id, preconditions)
+    job_url_fragment = canonical_url.rstrip("/").rsplit("/", 1)[-1]
+    result = submit_application(page, job_url_fragment, application_id, dice_job_id, preconditions)
     record_submission_result(application_id, result)
+
+    # Regression, live-found 2026-08-22: record_submission_result() only
+    # ever writes applications.status on VERIFIED_SUBMITTED (by design --
+    # see its own docstring). Every other SubmissionStatus left the
+    # application stuck at SUBMITTING forever, with no path back to
+    # QUEUED (SUBMITTING isn't even a valid source state for QUEUED in
+    # STATUS_TRANSITIONS) -- a real, previously-latent gap, only ever
+    # exercised by this phase's first genuine live Submit attempt.
+    # SUBMIT_FAILED is Dice explicitly rejecting the submission -> FAILED,
+    # no automatic retry. Everything else (VERIFICATION_UNCERTAIN,
+    # AUTH_REQUIRED, SECURITY_CHALLENGE, NEEDS_INPUT, NOT_SUBMITTED --
+    # live re-checks inside submit_application can still surface any of
+    # these even though this function hardcodes its own preconditions
+    # true) is FAILED_RETRYABLE, so a human can requeue_failed_application()
+    # once the underlying condition (auth, challenge, etc.) has cleared.
+    if result.status == SubmissionStatus.SUBMIT_FAILED:
+        _fail(application_id, "FAILED", result.status.value, result.reason)
+    elif result.status != SubmissionStatus.VERIFIED_SUBMITTED:
+        _fail(application_id, "FAILED_RETRYABLE", result.status.value, result.reason)
 
     if result.status == SubmissionStatus.VERIFIED_SUBMITTED:
         return ApplicationRunResult(application_id, dice_job_id, StopReason.VERIFIED_SUBMITTED, result.reason)
