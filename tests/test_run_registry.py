@@ -105,3 +105,49 @@ def test_two_runs_do_not_see_each_others_application_ids():
         assert set(run_registry.get_run(run_b["id"])["application_ids"]) == {app_b1["id"], app_b2["id"]}
     finally:
         _cleanup(job_a["id"], job_b1["id"], job_b2["id"], run_ids=[run_a["id"], run_b["id"]])
+
+
+# ── resume_run: the UI-only path back from STOPPED, no terminal required ──
+
+
+def test_resume_run_moves_stopped_run_to_pending():
+    job, app = _make_queued_application()
+    run = run_registry.create_run([app["id"]], candidate_id=CANDIDATE)
+    try:
+        run_registry.update_run_status(run["id"], "STOPPED")
+        resumed = run_registry.resume_run(run["id"])
+        assert resumed["status"] == "PENDING"
+        assert resumed["stop_requested"] is False
+        assert resumed["claimed_by"] is None
+    finally:
+        _cleanup(job["id"], run_ids=[run["id"]])
+
+
+def test_resume_run_rejects_non_stopped_run():
+    job, app = _make_queued_application()
+    run = run_registry.create_run([app["id"]], candidate_id=CANDIDATE)  # starts PENDING, never STOPPED
+    try:
+        try:
+            run_registry.resume_run(run["id"])
+            assert False, "expected InvalidResumeError"
+        except run_registry.InvalidResumeError:
+            pass
+        assert run_registry.get_run(run["id"])["status"] == "PENDING"  # untouched
+    finally:
+        _cleanup(job["id"], run_ids=[run["id"]])
+
+
+def test_resume_run_clears_a_stale_claim():
+    job, app = _make_queued_application()
+    run = run_registry.create_run([app["id"]], candidate_id=CANDIDATE)
+    try:
+        client = get_supabase_client()
+        client.table("application_runs").update(
+            {"status": "STOPPED", "claimed_by": "worker-stale", "claimed_at": "2026-08-22T00:00:00+00:00"}
+        ).eq("id", run["id"]).execute()
+
+        resumed = run_registry.resume_run(run["id"])
+        assert resumed["claimed_by"] is None
+        assert resumed["claimed_at"] is None
+    finally:
+        _cleanup(job["id"], run_ids=[run["id"]])

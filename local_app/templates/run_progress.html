@@ -31,7 +31,7 @@
 {% if progress.run.status in ('PENDING', 'RUNNING') and not progress.worker.online %}
 <div class="card" style="border-left: 4px solid var(--accent);">
   <h2>Waiting for DicePilot worker</h2>
-  <p class="muted">This run is written and waiting — no worker is currently online to process it. Start the worker on the Mac with the authenticated Dice Chrome: <code>.venv/bin/python -m dice_browser.worker_daemon</code></p>
+  <p class="muted">DicePilot worker is offline. Applications are queued and will start automatically when the worker reconnects.</p>
 </div>
 {% endif %}
 
@@ -97,6 +97,11 @@
     <button class="btn secondary" type="submit">Stop Run</button>
   </form>
   <p class="muted" style="font-size:0.8rem; margin-top:0.5rem;">Stops before the next job starts — never interrupts a Submit or verification already in progress. This page refreshes automatically every 5 seconds.</p>
+  {% elif progress.run.status == 'STOPPED' %}
+  <form method="post" action="{{ url_for('run_resume_view', run_id=run_id) }}">
+    <button class="btn" type="submit">Resume Run</button>
+  </form>
+  <p class="muted" style="font-size:0.8rem; margin-top:0.5rem;">This run was stopped. Resuming moves it back to PENDING — the worker daemon picks it up on its own next poll, starting with whatever wasn't processed yet.</p>
   {% else %}
   <p class="muted">Run finished — {{ progress.run.status }}.</p>
   {% endif %}

@@ -237,6 +237,38 @@ def test_stop_run_route_sets_stop_requested(configured_candidate):
         _cleanup(job["id"])
 
 
+# Resume Run: the normal, UI-only way to move a STOPPED run back to
+# PENDING -- no terminal/Python required in normal operation. The
+# already-running worker daemon's own poll loop claims it from here.
+def test_resume_run_route_moves_stopped_run_to_pending(configured_candidate):
+    job = _make_job("TEST Resume Run Route")
+    try:
+        resp = _client().post("/jobs/apply", data={"job_id": [job["id"]]}, follow_redirects=False)
+        run_id = resp.headers["Location"].rsplit("/", 1)[-1]
+        run_registry.update_run_status(run_id, "STOPPED")  # simulate the daemon having stopped it
+
+        resume_resp = _client().post(f"/runs/{run_id}/resume", follow_redirects=False)
+        assert resume_resp.status_code == 302
+        run = run_registry.get_run(run_id)
+        assert run["status"] == "PENDING"
+        assert run["stop_requested"] is False
+    finally:
+        _cleanup(job["id"])
+
+
+def test_resume_run_route_is_a_no_op_for_a_run_that_is_not_stopped(configured_candidate):
+    job = _make_job("TEST Resume Run NotStopped")
+    try:
+        resp = _client().post("/jobs/apply", data={"job_id": [job["id"]]}, follow_redirects=False)
+        run_id = resp.headers["Location"].rsplit("/", 1)[-1]  # freshly created -- PENDING, never STOPPED
+
+        resume_resp = _client().post(f"/runs/{run_id}/resume", follow_redirects=False)
+        assert resume_resp.status_code == 302
+        assert run_registry.get_run(run_id)["status"] == "PENDING"  # unchanged, no crash
+    finally:
+        _cleanup(job["id"])
+
+
 # ── 16/17/19/20/21/22: structural/boundary checks ───────────────────────
 # Matches this project's established pattern (tests/test_phase6_boundary.py) --
 # jobs_apply never launches a worker process of any kind (see

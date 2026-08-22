@@ -200,6 +200,19 @@ def run_stop_view(run_id):
     return redirect(url_for("run_progress_view", run_id=run_id))
 
 
+@app.route("/runs/<run_id>/resume", methods=["POST"])
+def run_resume_view(run_id):
+    """The normal, UI-only way to move a deliberately-STOPPED run back to
+    PENDING -- no terminal/Python required. The already-running worker
+    daemon's own poll loop claims it from here exactly like any other
+    PENDING run; this route never launches or contacts a worker itself."""
+    try:
+        run_registry.resume_run(run_id)
+    except (run_registry.RunNotFoundError, run_registry.InvalidResumeError):
+        pass
+    return redirect(url_for("run_progress_view", run_id=run_id))
+
+
 @app.route("/api/discover", methods=["POST"])
 def api_discover():
     payload = request.get_json(silent=True) or {}

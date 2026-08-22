@@ -183,3 +183,38 @@ def test_run_progress_shows_failed_with_exact_reason():
         assert "Dice explicitly reported that the application could not be submitted." in body
     finally:
         _cleanup(job["id"])
+
+
+# 11. STOPPED shows a real Resume Run button, not just "Run finished"
+def test_run_progress_shows_resume_run_button_for_stopped_run():
+    job = _make_job("TEST UX Stopped")
+    app_ = enqueue_application(TEST_CANDIDATE_ID, job["id"])
+    run = run_registry.create_run([app_["id"]], candidate_id=TEST_CANDIDATE_ID)
+    run_registry.update_run_status(run["id"], "STOPPED")
+    try:
+        body = _client().get(f"/runs/{run['id']}").get_data(as_text=True)
+        assert "Resume Run" in body
+        assert f'action="/runs/{run["id"]}/resume"' in body
+    finally:
+        _cleanup(job["id"])
+
+
+# 12. Worker-offline copy is truthful: queued work will start automatically,
+# no terminal instruction shown to the normal user. worker_status() is
+# monkeypatched -- this project's own real daemon may genuinely be online
+# in the shared Supabase project while this test runs, so the real,
+# global (not worker_id-scoped -- a documented limitation) heartbeat
+# state can't be relied on to be offline here.
+def test_run_progress_worker_offline_message_says_automatic_not_terminal(monkeypatch):
+    monkeypatch.setattr(
+        run_registry, "worker_status", lambda max_age_seconds=30: {"online": False, "status": "OFFLINE", "last_heartbeat_at": None, "age_seconds": None}
+    )
+    job = _make_job("TEST UX Offline")
+    app_ = enqueue_application(TEST_CANDIDATE_ID, job["id"])
+    run = run_registry.create_run([app_["id"]], candidate_id=TEST_CANDIDATE_ID)
+    try:
+        body = _client().get(f"/runs/{run['id']}").get_data(as_text=True)
+        assert "DicePilot worker is offline. Applications are queued and will start automatically when the worker reconnects." in body
+        assert "worker_daemon" not in body  # no CLI/module instruction shown in the normal UI
+    finally:
+        _cleanup(job["id"])

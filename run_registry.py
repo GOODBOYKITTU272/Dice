@@ -69,6 +69,32 @@ def update_run_status(run_id: str, status: str) -> dict[str, Any]:
     return get_run(run_id)
 
 
+class InvalidResumeError(RuntimeError):
+    """Raised when resume_run() is called on a run that isn't STOPPED --
+    resuming a RUNNING/PENDING run would be a no-op at best and resuming
+    a COMPLETE one would silently reopen a finished batch."""
+
+
+def resume_run(run_id: str) -> dict[str, Any]:
+    """The UI counterpart to request_stop(): moves a deliberately-STOPPED
+    run back to PENDING so the daemon's normal poll loop claims it again
+    on its own. Only valid from STOPPED -- this is not a generic status
+    setter."""
+    client = get_supabase_client()
+    current = get_run(run_id)
+    if current["status"] != "STOPPED":
+        raise InvalidResumeError(f"run {run_id} is {current['status']!r}, not STOPPED")
+    result = (
+        client.table("application_runs")
+        .update({"status": "PENDING", "stop_requested": False, "claimed_by": None, "claimed_at": None})
+        .eq("id", run_id)
+        .execute()
+    )
+    if not result.data:
+        raise RunNotFoundError(run_id)
+    return get_run(run_id)
+
+
 def request_stop(run_id: str) -> dict[str, Any]:
     """Sets stop_requested -- does not touch status. The worker daemon
     checks is_stopped() before claiming its next application and, if
