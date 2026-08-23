@@ -10,6 +10,7 @@
   <div class="card">
     <h2>Cloud Worker</h2>
     <dl class="kv">
+      <dt>Browser Provider</dt><dd>{{ browser_provider|capitalize }}</dd>
       <dt>Worker</dt><dd><span class="badge {{ 'green' if worker.online else 'red' }}">{{ 'ONLINE' if worker.online else 'OFFLINE' }}</span></dd>
       <dt>Browser / Dice Login</dt>
       <dd>

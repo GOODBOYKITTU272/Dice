@@ -159,6 +159,76 @@ def test_open_job_rejects_invalid_url_before_navigating(page):
         open_job(page, "https://www.dice.com/job-applications/abc/start-apply")
 
 
+# Regression, live-found 2026-08-23 (Steel compatibility spike): a real
+# job we know was successfully submitted showed already_applied=False --
+# current Dice markup no longer emits .ribbon-status-applied at all. The
+# real signal (also live-verified) is the same apply button rendered
+# disabled with the exact accessible name "Applied".
+def test_open_job_detects_already_applied_via_current_disabled_applied_button(page):
+    _prep(
+        page,
+        """
+        <html><body>
+        <nav><a href="/dashboard/logout">Sign Out</a></nav>
+        <button data-testid="apply-button" disabled>Applied</button>
+        </body></html>
+        """,
+    )
+    result = open_job(page, "https://www.dice.com/job-detail/fake-id-for-test")
+    assert result.authenticated is True
+    assert result.already_applied is True
+
+
+# The old ribbon selector still works if Dice ever brings it back.
+def test_open_job_still_detects_already_applied_via_legacy_ribbon(page):
+    _prep(
+        page,
+        """
+        <html><body>
+        <nav><a href="/dashboard/logout">Sign Out</a></nav>
+        <div class="ribbon-status-applied">Applied</div>
+        </body></html>
+        """,
+    )
+    result = open_job(page, "https://www.dice.com/job-detail/fake-id-for-test")
+    assert result.already_applied is True
+
+
+# A real false positive found live during this fix: generic "Create job
+# alert" marketing copy ("...the job you applied for") appears on every
+# job page regardless of application status and must never be mistaken
+# for an actual applied-state indicator.
+def test_open_job_does_not_false_positive_on_unrelated_applied_text(page):
+    _prep(
+        page,
+        """
+        <html><body>
+        <nav><a href="/dashboard/logout">Sign Out</a></nav>
+        <p>Never miss an opportunity! Create an alert based on the job you applied for.</p>
+        <button data-testid="apply-button">Easy Apply</button>
+        </body></html>
+        """,
+    )
+    result = open_job(page, "https://www.dice.com/job-detail/fake-id-for-test")
+    assert result.authenticated is True
+    assert result.already_applied is False
+
+
+def test_open_job_does_not_false_positive_on_unrelated_applied_mathematics_text(page):
+    _prep(
+        page,
+        """
+        <html><body>
+        <nav><a href="/dashboard/logout">Sign Out</a></nav>
+        <p>Candidates should have a degree in applied mathematics or a related field.</p>
+        </body></html>
+        """,
+    )
+    result = open_job(page, "https://www.dice.com/job-detail/fake-id-for-test")
+    assert result.authenticated is True
+    assert result.already_applied is False
+
+
 def test_open_job_never_clicks_anything(page):
     # Regression guard: open_job must be pure inspection. Fail the test if
     # any click method is ever invoked on the page during a call.

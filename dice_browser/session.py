@@ -10,6 +10,7 @@ NEEDS_INPUT, never a bypass attempt.
 from __future__ import annotations
 
 import os
+import socket
 from pathlib import Path
 
 from playwright.sync_api import BrowserContext, Page, sync_playwright
@@ -238,3 +239,61 @@ def classify_authentication(page: Page) -> BrowserState:
     if negative:
         return BrowserState.AUTH_REQUIRED
     return BrowserState.NEEDS_INPUT
+
+
+_SINGLETON_LOCK_ARTIFACTS = ("SingletonLock", "SingletonCookie", "SingletonSocket")
+
+
+def _singleton_lock_is_stale(lock_target: str) -> bool:
+    """Chrome writes SingletonLock as a symlink to '<hostname>-<pid>' of
+    the process holding it. Stale means: a hostname that isn't this host
+    (a different, now-dead container instance -- exactly what a Docker
+    container recreation leaves behind), or a pid that isn't alive on
+    this host. Anything we can't parse is treated as NOT stale -- when
+    in doubt, never touch a lock that might be protecting a real,
+    running Chrome."""
+    hostname, sep, pid_str = lock_target.rpartition("-")
+    if not sep:
+        return False  # malformed -- can't confirm staleness, so don't touch it
+    if hostname != socket.gethostname():
+        return True  # well-formed lock for a different host/container instance -- definitely stale
+    try:
+        pid = int(pid_str)
+    except ValueError:
+        return False
+    return not _pid_is_alive(pid)
+
+
+def clean_stale_singleton_locks(profile_dir: str | Path) -> list[str]:
+    """Removes ONLY Chrome's own SingletonLock/SingletonCookie/
+    SingletonSocket artifacts from a persistent profile directory, and
+    only when SingletonLock is confirmed stale (see
+    _singleton_lock_is_stale). Never touches Cookies, Login Data, Local
+    Storage, IndexedDB, History, Preferences, Session Storage, or
+    anything else in the profile -- this function only ever looks at
+    (and removes) the three names above, nothing else.
+
+    Exists for exactly the failure this project hit live: a Steel/Docker
+    container recreation can leave Chrome's own stale lock behind,
+    refusing the next launch ("profile appears to be in use by another
+    Chromium process") even though the profile itself (and its saved
+    Dice login) is perfectly intact. Call this once before starting
+    Chrome against a durable, shared profile directory -- never while a
+    real Chrome process might still be using it (the staleness check is
+    the actual safety gate, not just calling this at the "right time")."""
+    profile_dir = Path(profile_dir)
+    lock_path = profile_dir / "SingletonLock"
+    if not lock_path.is_symlink():
+        return []
+
+    target = os.readlink(lock_path)
+    if not _singleton_lock_is_stale(target):
+        return []
+
+    removed = []
+    for name in _SINGLETON_LOCK_ARTIFACTS:
+        artifact = profile_dir / name
+        if artifact.is_symlink() or artifact.exists():
+            artifact.unlink()
+            removed.append(name)
+    return removed

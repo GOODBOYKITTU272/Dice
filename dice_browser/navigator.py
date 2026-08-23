@@ -94,10 +94,24 @@ def _safe_title(page: Page) -> str:
 
 def _detect_already_applied(page: Page) -> bool:
     # Reference concept from the Phase 4A audit (AndrewKassab/Dice-AI):
-    # ribbon-status-applied. Treated as a secondary safety signal only —
-    # Supabase's applications table remains the durable primary source
-    # once application execution exists.
-    return page.locator(".ribbon-status-applied").count() > 0
+    # ribbon-status-applied. Kept as a fallback in case Dice reintroduces
+    # it on some page variant, but live verification (2026-08-23, Steel
+    # compatibility spike) found current Dice markup no longer emits
+    # that class at all on a job we know was actually submitted.
+    if page.locator(".ribbon-status-applied").count() > 0:
+        return True
+    # Current signal (live-verified 2026-08-23 against a real,
+    # previously-submitted job): the same button element that shows
+    # "Apply Now"/"Easy Apply" before applying (data-testid="apply-button")
+    # instead renders disabled with the exact accessible name "Applied".
+    # A first attempt at this fix tried a loose page-wide text search for
+    # "You applied" and got a real false positive from unrelated "Create
+    # a job alert" marketing copy ("...the job you applied for") that
+    # appears on every job page regardless of application status --
+    # exactly the failure mode this project was warned to avoid.
+    # get_by_role with exact=True matches only an element whose ENTIRE
+    # accessible name is "Applied", never a substring within other text.
+    return page.get_by_role("button", name="Applied", exact=True).count() > 0
 
 
 def _detect_easy_apply(page: Page) -> bool:

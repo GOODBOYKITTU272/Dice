@@ -4,14 +4,24 @@
 # cron/a monitoring agent; read-only, no Dice navigation.
 set -euo pipefail
 
-CDP_URL="${DICEPILOT_CDP_URL:-http://127.0.0.1:9333}"
+PROVIDER="${DICEPILOT_BROWSER_PROVIDER:-local}"
 
-echo "Checking CDP endpoint at $CDP_URL ..."
-if ! curl -fsS -m 5 "$CDP_URL/json/version" > /dev/null; then
-  echo "FAIL: CDP endpoint not reachable at $CDP_URL"
+if [ "$PROVIDER" = "steel" ]; then
+  # Steel's CDP URL is ws://..., which curl can't check directly -- its
+  # HTTP API lives on the same host:port, so probe that instead.
+  CDP_URL="${DICEPILOT_CDP_URL:-ws://localhost:3000/}"
+  HEALTH_URL="$(echo "$CDP_URL" | sed 's#^ws#http#')v1/sessions"
+else
+  CDP_URL="${DICEPILOT_CDP_URL:-http://127.0.0.1:9333}"
+  HEALTH_URL="$CDP_URL/json/version"
+fi
+
+echo "Checking browser provider ($PROVIDER) at $HEALTH_URL ..."
+if ! curl -fsS -m 5 "$HEALTH_URL" > /dev/null; then
+  echo "FAIL: browser endpoint not reachable at $HEALTH_URL"
   exit 1
 fi
-echo "OK: CDP reachable."
+echo "OK: browser endpoint reachable."
 
 echo "Checking worker heartbeat via Supabase ..."
 cd "$(dirname "$0")/../.."

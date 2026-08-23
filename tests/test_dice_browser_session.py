@@ -12,11 +12,14 @@ import os
 import pytest
 from playwright.sync_api import sync_playwright
 
+import socket
+
 from dice_browser.models import BrowserState
 from dice_browser.session import (
     ProfileInUseError,
     ProfileLock,
     classify_authentication,
+    clean_stale_singleton_locks,
     detect_challenge,
     is_authenticated,
 )
@@ -79,6 +82,76 @@ def test_profile_lock_release_only_removes_own_lock(tmp_path):
     lock = ProfileLock(tmp_path)
     lock.release()  # must be a no-op — we never acquired it
     assert lock_path.exists()
+
+
+# ── stale Chrome Singleton lock cleanup (Phase 7.2, Steel deployment) ────
+# Live-found 2026-08-23: a Steel/Docker container recreation can leave
+# Chrome's own SingletonLock/Cookie/Socket behind, refusing the next
+# launch against the same durable profile even though the profile's
+# actual data (Dice login included) is intact. These never touch a real
+# browser -- pure filesystem fixtures.
+
+
+def _write_singleton_lock(profile_dir, target: str) -> None:
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "SingletonLock").symlink_to(target)
+    (profile_dir / "SingletonCookie").symlink_to("some-cookie-value")
+    (profile_dir / "SingletonSocket").symlink_to("/tmp/some.sock")
+
+
+def test_clean_stale_singleton_locks_removes_lock_for_different_host(tmp_path):
+    _write_singleton_lock(tmp_path, "some-other-host-12345")
+    removed = clean_stale_singleton_locks(tmp_path)
+    assert set(removed) == {"SingletonLock", "SingletonCookie", "SingletonSocket"}
+    assert not (tmp_path / "SingletonLock").exists()
+    assert not (tmp_path / "SingletonCookie").exists()
+    assert not (tmp_path / "SingletonSocket").exists()
+
+
+def test_clean_stale_singleton_locks_removes_lock_for_dead_pid_on_this_host(tmp_path):
+    _write_singleton_lock(tmp_path, f"{socket.gethostname()}-999999")  # essentially guaranteed dead
+    removed = clean_stale_singleton_locks(tmp_path)
+    assert set(removed) == {"SingletonLock", "SingletonCookie", "SingletonSocket"}
+
+
+def test_clean_stale_singleton_locks_is_safe_when_no_lock_exists(tmp_path):
+    assert clean_stale_singleton_locks(tmp_path) == []
+
+
+def test_clean_stale_singleton_locks_never_touches_real_browser_state(tmp_path):
+    # Real profile data alongside the stale lock -- must survive untouched.
+    (tmp_path / "Cookies").write_text("fake-cookie-db-contents")
+    (tmp_path / "Login Data").write_text("fake-login-data")
+    default_dir = tmp_path / "Default"
+    default_dir.mkdir()
+    (default_dir / "Local Storage").write_text("fake-local-storage")
+
+    _write_singleton_lock(tmp_path, "some-other-host-12345")
+    clean_stale_singleton_locks(tmp_path)
+
+    assert (tmp_path / "Cookies").read_text() == "fake-cookie-db-contents"
+    assert (tmp_path / "Login Data").read_text() == "fake-login-data"
+    assert (default_dir / "Local Storage").read_text() == "fake-local-storage"
+
+
+def test_clean_stale_singleton_locks_protects_active_browser_on_this_host(tmp_path):
+    # Our own real, alive pid, on this real host -- a genuinely active lock.
+    _write_singleton_lock(tmp_path, f"{socket.gethostname()}-{os.getpid()}")
+    removed = clean_stale_singleton_locks(tmp_path)
+    assert removed == []
+    # .exists() follows the symlink to a target that (deliberately, in this
+    # fixture) isn't a real file -- is_symlink() is the correct "still there" check.
+    assert (tmp_path / "SingletonLock").is_symlink()
+    assert (tmp_path / "SingletonCookie").is_symlink()
+    assert (tmp_path / "SingletonSocket").is_symlink()
+
+
+def test_clean_stale_singleton_locks_leaves_malformed_lock_alone(tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "SingletonLock").symlink_to("totallyunparseable")  # no "-" at all
+    removed = clean_stale_singleton_locks(tmp_path)
+    assert removed == []
+    assert (tmp_path / "SingletonLock").is_symlink()
 
 
 # ── auth detection ───────────────────────────────────────────────────────

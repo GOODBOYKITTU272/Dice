@@ -28,6 +28,9 @@ import os
 import time
 import uuid
 
+from dice_browser.browser_provider import resolve_browser_provider
+from dice_browser.session import BROWSER_PROFILE_DIR_ENV_VAR, clean_stale_singleton_locks
+
 import run_registry
 from dice_browser.worker import SubmissionPolicy, run_worker_for_run
 
@@ -195,7 +198,15 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("  nothing to recover.")
 
-    print(f"DicePilot worker daemon starting -- worker_id={worker_id}, cdp_url={cdp_url}")
+    provider = resolve_browser_provider()
+    if provider == "steel":
+        profile_dir = os.environ.get(BROWSER_PROFILE_DIR_ENV_VAR)
+        if profile_dir:
+            removed = clean_stale_singleton_locks(profile_dir)
+            if removed:
+                print(f"Cleared stale Chrome lock artifacts from a previous container instance: {removed}")
+
+    print(f"DicePilot worker daemon starting -- worker_id={worker_id}, browser_provider={provider}, cdp_url={cdp_url}")
     if override:
         print(f"WARNING: --submission-policy {override.value} overrides every claimed run's own stored policy (debug only)")
     run_daemon(

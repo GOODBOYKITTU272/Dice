@@ -9,6 +9,18 @@ engine changes — this only relocates where the worker and its browser run.
 Vercel UI  →  Supabase (runs/applications/events/heartbeat)  →  Cloud Worker  →  Playwright + Chrome  →  persistent browser profile  →  Dice
 ```
 
+**Preferred browser layer: self-hosted Steel Browser** (Docker,
+[steel-dev/steel-browser](https://github.com/steel-dev/steel-browser)) —
+verified live during the Phase 7.2 compatibility spike (2026-08-23):
+`playwright.chromium.connect_over_cdp()` works against it completely
+unmodified, and an authenticated Dice session survives same-session
+reconnect, container restart, full `docker compose down`/`up`, and
+`--force-recreate`, once `CHROME_USER_DATA_DIR` is pointed at a durable
+named volume (see `deploy/cloud-worker/steel/docker-compose.yml`). Steps
+5–7 below cover Steel; the earlier local-Chrome-under-Xvfb approach
+(`start-browser.sh`, `dicepilot-browser.service`) is kept as a documented
+fallback for a VM where Docker isn't available or preferred.
+
 This is still single-user V1: one candidate, one Dice account, one browser
 profile, one worker, sequential applications. No multi-tenant browser pool,
 no Kubernetes, no autoscaling — see the parent task for the explicit
@@ -74,11 +86,37 @@ Required for the worker:
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-side only — never in frontend code |
 | `APPLYWIZZ_API_BASE_URL` / `APPLYWIZZ_API_TOKEN` | Candidate profile source |
 | `DICEPILOT_CANDIDATE_ID` | Which candidate this worker processes runs for |
-| `DICEPILOT_CDP_URL` | `http://127.0.0.1:9333` — worker and browser are same-host |
-| `DICEPILOT_BROWSER_PROFILE_DIR` | `/opt/dicepilot/browser-profile` — see step 6 |
+| `DICEPILOT_CDP_URL` | Steel: `ws://localhost:3000/`. Local Chrome: `http://127.0.0.1:9333`. Same-host either way |
+| `DICEPILOT_BROWSER_PROFILE_DIR` | `/data/steel/chrome-profile` (Steel) or `/opt/dicepilot/browser-profile` (local Chrome) — see step 6 |
+| `DICEPILOT_BROWSER_PROVIDER` | `steel` (preferred) or `local` — selects which of the two below is active, and whether the worker runs Steel's stale-lock cleanup at startup |
 | `DICEPILOT_SUBMISSION_MODE` | Leave unset (defaults to `AUTHORIZED_AUTONOMOUS`, the intended normal mode) unless you specifically want new runs to default to manual confirmation |
 
 ## 5. Configure the persistent browser profile disk
+
+### Option A — Steel Browser (preferred)
+
+Requires Docker + Docker Compose on the VM (`sudo apt install -y docker.io docker-compose-plugin`).
+
+```bash
+cd /opt/dicepilot/dice/deploy/cloud-worker/steel
+docker compose up -d
+```
+
+This starts Steel's API (port 3000, plus 9223 for its own raw CDP
+console — keep both bound to `127.0.0.1`/internal only, never public)
+and its UI (port 5173, for the live-viewer re-auth procedure below). The
+compose file already points `CHROME_USER_DATA_DIR` at a durable named
+Docker volume (`chrome_profile`) — that volume is what makes the Dice
+login survive container restarts, recreation, and VM reboots (verified
+live; see the spike notes in `docker-compose.yml`'s own comment).
+
+Set `DICEPILOT_BROWSER_PROVIDER=steel`, `DICEPILOT_CDP_URL=ws://localhost:3000/`,
+and `DICEPILOT_BROWSER_PROFILE_DIR=/data/steel/chrome-profile` (the path
+*as seen by whatever process runs `clean_stale_singleton_locks` — i.e.
+the worker needs filesystem access to that same volume; run the worker
+on the same VM as Steel, which is the whole point of this setup).
+
+### Option B — local Chrome under Xvfb (fallback/reference)
 
 ```bash
 sudo mkdir -p /opt/dicepilot/browser-profile
@@ -87,9 +125,39 @@ sudo chown dicepilot:dicepilot /opt/dicepilot/browser-profile
 
 This directory **must** be on the durable/persistent volume, not
 `/tmp` or ephemeral instance storage — it's the entire reason the Dice
-login survives worker restarts and VM reboots.
+login survives worker restarts and VM reboots. Use this path if Docker
+isn't available or preferred on the target VM; it's otherwise equivalent.
 
 ## 6. Start the browser service
+
+**Steel (Option A):** already started in step 5 (`docker compose up -d`).
+Add a systemd unit if you want it to survive a reboot without a manual
+`docker compose up`:
+
+```ini
+# /etc/systemd/system/dicepilot-steel.service
+[Unit]
+Description=DicePilot Steel Browser service
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=true
+WorkingDirectory=/opt/dicepilot/dice/deploy/cloud-worker/steel
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now dicepilot-steel
+```
+
+**Local Chrome (Option B):**
 
 ```bash
 sudo cp deploy/cloud-worker/dicepilot-browser.service /etc/systemd/system/
@@ -103,7 +171,19 @@ sudo systemctl status dicepilot-browser
 DicePilot never automates or bypasses login — a human logs in once,
 interactively, and the persistent profile remembers it from then on.
 
-**Recommended: SSH + X11 forwarding.** From your own machine:
+**Steel (Option A):** Steel's own UI (`http://localhost:5173`, or
+tunneled — see below) shows a live view of the browser and lets you
+click into it directly; no X11 forwarding needed. Never expose port 5173
+or 3000 publicly — reach them only via:
+
+```bash
+ssh -L 5173:localhost:5173 -L 3000:localhost:3000 dicepilot@<vm-host>
+```
+
+then open `http://localhost:5173` in your own browser and log into Dice
+normally, including any OTP/CAPTCHA/security step.
+
+**Local Chrome (Option B): SSH + X11 forwarding.** From your own machine:
 
 ```bash
 ssh -X dicepilot@<vm-host>
@@ -112,18 +192,24 @@ DISPLAY=:99 google-chrome --user-data-dir=/opt/dicepilot/browser-profile \
 ```
 
 X11-forwards the *already-running* Xvfb display (`:99`, matching
-`start-browser.sh`) to your local screen. Log into Dice normally —
-including any OTP/CAPTCHA/security step — exactly as you would locally.
-Close the window when done; the browser service keeps running headless-side.
+`start-browser.sh`) to your local screen. Log into Dice normally, then
+close the window — the browser service keeps running headless-side.
 
 Alternative for a VM without X11 forwarding support: a restricted,
-authentication-gated noVNC/Xpra session tunneled over SSH (e.g.
-`ssh -L 6080:localhost:6080 ...` to a noVNC server bound to `127.0.0.1`
-only) — never bind VNC/noVNC to a public interface.
+authentication-gated noVNC/Xpra session tunneled over SSH — never bind
+VNC/noVNC to a public interface.
 
-**Never**: automate the login form, inject cookies from another device, or
-attempt to bypass CAPTCHA/OTP. If Dice presents a challenge, a human
-resolves it directly in that window, same as local operation always required.
+**Never, for either option**: automate the login form, inject cookies
+from another device, or attempt to bypass CAPTCHA/OTP. If Dice presents
+a challenge, a human resolves it directly in that window.
+
+**After any Steel container recreation** (`down`/`up`, `--force-recreate`,
+an image update), Chrome can leave a stale `SingletonLock` behind and
+refuse to launch — the worker clears this automatically at startup when
+`DICEPILOT_BROWSER_PROVIDER=steel` (see
+`dice_browser.session.clean_stale_singleton_locks`); it never touches
+cookies, Local Storage, or any other real profile data, only the three
+lock artifact files.
 
 ## 8. Start the worker service
 

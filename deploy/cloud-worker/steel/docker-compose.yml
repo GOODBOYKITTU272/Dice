@@ -1,0 +1,68 @@
+# Phase 7.2: self-hosted Steel Browser (github.com/steel-dev/steel-browser),
+# the preferred browser-hosting service for the DicePilot cloud worker --
+# verified live during the Steel compatibility spike (2026-08-23):
+# same-session reconnect, container restart, full `docker compose down`
+# + `up`, and `--force-recreate` all preserved an authenticated Dice
+# session once CHROME_USER_DATA_DIR was pointed at a durable named volume.
+#
+# This is Steel's own upstream docker-compose.yml (see
+# github.com/steel-dev/steel-browser/blob/main/docker-compose.yml) with
+# exactly two additions: CHROME_USER_DATA_DIR and the chrome_profile
+# volume it's mounted from. Nothing else changed -- do not fold in
+# unrelated Steel upstream changes here without re-diffing against the
+# real project.
+#
+# IMPORTANT: after ANY container recreation (`down`/`up`,
+# `--force-recreate`, an image update), Chrome can leave a stale
+# SingletonLock behind and refuse to launch ("profile appears to be in
+# use by another Chromium process") even though the profile itself is
+# intact. Run the worker with DICEPILOT_BROWSER_PROVIDER=steel and
+# DICEPILOT_BROWSER_PROFILE_DIR pointed at this same path (see
+# dice_browser.session.clean_stale_singleton_locks, called automatically
+# at worker startup) -- or run it manually first:
+#   python -c "from dice_browser.session import clean_stale_singleton_locks; \
+#     print(clean_stale_singleton_locks('/data/steel/chrome-profile'))"
+
+services:
+  api:
+    image: ghcr.io/steel-dev/steel-browser-api:latest
+    ports:
+      - "3000:3000"
+      - "9223:9223"
+    volumes:
+      - logs:/data/logs
+      - exports:/tmp/steel-browser-exports
+      - ./.cache:/app/.cache
+      - chrome_profile:/data/steel/chrome-profile
+    environment:
+      - DOMAIN=${DOMAIN:-localhost:3000}
+      - CDP_DOMAIN=${CDP_DOMAIN:-localhost:9223}
+      - LOG_STORAGE_ENABLED=true
+      - LOG_STORAGE_PATH=/data/logs/browser-logs.duckdb
+      - CHROME_USER_DATA_DIR=/data/steel/chrome-profile
+    networks:
+      - steel-network
+
+  ui:
+    image: ghcr.io/steel-dev/steel-browser-ui:latest
+    ports:
+      - "5173:80"
+    environment:
+      - API_URL=${API_URL:-http://api:3000}
+    depends_on:
+      - api
+    networks:
+      - steel-network
+
+networks:
+  steel-network:
+    name: steel-network
+    driver: bridge
+
+volumes:
+  logs:
+    driver: local
+  exports:
+    driver: local
+  chrome_profile:
+    driver: local

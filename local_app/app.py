@@ -25,6 +25,7 @@ from flask import Flask, jsonify, redirect, render_template, request, url_for  #
 
 import run_registry  # noqa: E402
 from db.application_repository import DuplicateApplicationError, enqueue_application  # noqa: E402
+from dice_browser.browser_provider import resolve_browser_provider  # noqa: E402
 from db.intervention_repository import (  # noqa: E402
     AlreadyResolvedError,
     InterventionNotFoundError,
@@ -372,7 +373,10 @@ def worker_view():
     client, error = _client_or_none()
     status = queries.worker_status_summary(client) if client else None
     worker = run_registry.worker_status()
-    return render_template("worker.html", active="worker", status=status, worker=worker, error=error)
+    browser_provider = resolve_browser_provider()
+    return render_template(
+        "worker.html", active="worker", status=status, worker=worker, browser_provider=browser_provider, error=error
+    )
 
 
 # ── Candidate ────────────────────────────────────────────────────────────
