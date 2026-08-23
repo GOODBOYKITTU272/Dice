@@ -11,13 +11,34 @@
     <h2>Cloud Worker</h2>
     <dl class="kv">
       <dt>Browser Provider</dt><dd>{{ browser_provider|capitalize }}</dd>
-      <dt>Worker</dt><dd><span class="badge {{ 'green' if worker.online else 'red' }}">{{ 'ONLINE' if worker.online else 'OFFLINE' }}</span></dd>
-      <dt>Browser / Dice Login</dt>
+      {% if browser_provider == 'steel' %}
+      <dt>Steel Service</dt>
+      <dd><span class="badge {{ 'green' if worker.status != 'BROWSER_DISCONNECTED' else 'red' }}">{{ 'ONLINE' if worker.status != 'BROWSER_DISCONNECTED' else 'OFFLINE' }}</span></dd>
+      {% endif %}
+      <dt>Worker</dt>
+      <dd>
+        {% if not worker.online %}
+        <span class="badge red">OFFLINE</span>
+        {% elif worker.status == 'RECOVERING' %}
+        <span class="badge amber">RECOVERING</span>
+        {% else %}
+        <span class="badge green">ONLINE</span>
+        {% endif %}
+      </dd>
+      <dt>Browser Session</dt>
       <dd>
         {% if not worker.online %}
         <span class="badge red">Unknown (worker offline)</span>
         {% else %}
-        <span class="badge {{ 'green' if worker.status == 'ONLINE' else 'red' }}">{{ worker_status_label(worker.status) }}</span>
+        <span class="badge {{ 'green' if worker.status == 'ONLINE' else 'red' if worker.status == 'BROWSER_DISCONNECTED' else 'amber' }}">{{ browser_session_label(worker.status) }}</span>
+        {% endif %}
+      </dd>
+      <dt>Dice Login</dt>
+      <dd>
+        {% if not worker.online %}
+        <span class="badge red">Unknown (worker offline)</span>
+        {% else %}
+        <span class="badge {{ 'green' if worker.status == 'ONLINE' else 'red' }}">{{ dice_login_label(worker.status) }}</span>
         {% endif %}
       </dd>
       <dt>Last Heartbeat</dt>
@@ -30,6 +51,7 @@
     </p>
     <a class="btn secondary" href="{{ url_for('browser_session_view') }}">Recheck Session</a>
     {% endif %}
+    <p class="muted" style="margin-top:0.5rem;">The cloud browser continues running when this page is closed.</p>
   </div>
   <div class="card">
     <h2>Current Run</h2>

@@ -41,6 +41,8 @@ app = Flask(__name__)
 app.jinja_env.globals["failure_reason"] = queries.failure_reason
 app.jinja_env.globals["submission_policy_label"] = queries.submission_policy_label
 app.jinja_env.globals["worker_status_label"] = queries.worker_status_label
+app.jinja_env.globals["browser_session_label"] = queries.browser_session_label
+app.jinja_env.globals["dice_login_label"] = queries.dice_login_label
 
 DEFAULT_ROLE = "Software Engineer"
 DEFAULT_MAX_RESULTS = 5

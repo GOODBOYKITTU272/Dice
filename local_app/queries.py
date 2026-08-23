@@ -420,12 +420,41 @@ WORKER_STATUS_LABELS = {
     "BROWSER_DISCONNECTED": "Browser Disconnected",
     "AUTH_REQUIRED": "Dice Login Required",
     "SECURITY_CHALLENGE": "Security Challenge",
+    "RECOVERING": "Recovering",
     "OFFLINE": "Offline",
 }
 
 
 def worker_status_label(status: str) -> str:
     return WORKER_STATUS_LABELS.get(status, status)
+
+
+# Phase 7.3: the raw heartbeat status also drives two operator-facing
+# fields distinct from the single combined badge above -- whether the
+# browser session itself is connected, and separately whether Dice is
+# authenticated -- so a Steel reconnect-in-progress reads as "Reconnecting"
+# rather than a scarier undifferentiated "Disconnected".
+_BROWSER_SESSION_LABELS = {
+    "ONLINE": "Connected",
+    "AUTH_REQUIRED": "Connected",
+    "SECURITY_CHALLENGE": "Connected",
+    "RECOVERING": "Reconnecting",
+    "BROWSER_DISCONNECTED": "Disconnected",
+}
+
+_DICE_LOGIN_LABELS = {
+    "ONLINE": "Authenticated",
+    "AUTH_REQUIRED": "Login Required",
+    "SECURITY_CHALLENGE": "Security Challenge",
+}
+
+
+def browser_session_label(status: str) -> str:
+    return _BROWSER_SESSION_LABELS.get(status, "Unknown")
+
+
+def dice_login_label(status: str) -> str:
+    return _DICE_LOGIN_LABELS.get(status, "Unknown")
 
 
 # ── Run Progress (Jobs selection -> worker) ───────────────────────────────

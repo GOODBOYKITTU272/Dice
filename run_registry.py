@@ -263,6 +263,50 @@ def recover_orphaned_runs(max_heartbeat_age_seconds: int = DEFAULT_STALE_LEASE_S
     return recovered
 
 
+def reconcile_run_after_disconnect(run_id: str) -> dict[str, list[str]]:
+    """Called immediately by the SAME worker that just had its own
+    Playwright/CDP connection fail mid-run (Phase 7.3 -- Steel session
+    recovery). Unlike recover_stale_applications()/recover_orphaned_runs()
+    (which gate on heartbeat staleness, for a genuinely different worker
+    process to safely determine a previous one died), this needs no such
+    gate: the caller already knows with certainty its own connection
+    just broke, so it reconciles right away rather than waiting for a
+    future startup pass.
+
+    Same classification as recover_stale_applications() and for the same
+    reason: PROCESSING is entirely pre-Submit, safe to hand straight back
+    to QUEUED. SUBMITTING crossed into the actual Submit attempt --
+    whether the click landed is genuinely unknown, so this NEVER
+    re-queues it (that would risk a second real Submit click); it lands
+    on FAILED_RETRYABLE with an explicit reason, inert until a human
+    verifies on Dice's own Applied Jobs page and deliberately requeues it
+    themselves."""
+    client = get_supabase_client()
+    reconciled: dict[str, list[str]] = {"requeued": [], "needs_verification": []}
+
+    for application in client.table("applications").select("id").eq("run_id", run_id).eq("status", "PROCESSING").execute().data:
+        client.table("applications").update({"status": "QUEUED", "worker_id": None, "lock_acquired_at": None}).eq(
+            "id", application["id"]
+        ).execute()
+        reconciled["requeued"].append(application["id"])
+
+    for application in client.table("applications").select("id").eq("run_id", run_id).eq("status", "SUBMITTING").execute().data:
+        client.table("applications").update(
+            {
+                "status": "FAILED_RETRYABLE",
+                "error_code": "SUBMISSION_UNCERTAIN_AFTER_CRASH",
+                "error_message": (
+                    "Worker lost its browser connection while submitting -- whether Submit was actually clicked "
+                    "is unknown. Verify on Dice's Applied Jobs page before requeuing."
+                ),
+            }
+        ).eq("id", application["id"]).execute()
+        reconciled["needs_verification"].append(application["id"])
+
+    client.table("application_runs").update({"status": "PENDING", "claimed_by": None, "claimed_at": None}).eq("id", run_id).execute()
+    return reconciled
+
+
 def _application_ids_for_run(client, run_id: str) -> list[str]:
     rows = client.table("applications").select("id").eq("run_id", run_id).order("queued_at").execute().data
     return [r["id"] for r in rows]
