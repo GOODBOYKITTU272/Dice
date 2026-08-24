@@ -42,7 +42,7 @@ from dice_browser.session import BROWSER_PROFILE_DIR_ENV_VAR, clean_stale_single
 from dice_browser.steel_session import SteelUnavailableError, ensure_steel_session, resolve_steel_base_url
 
 import run_registry
-from dice_browser.worker import SubmissionPolicy, run_worker_for_run
+from dice_browser.worker import StopReason, SubmissionPolicy, resume_needs_input_application, run_worker_for_run
 
 DEFAULT_POLL_INTERVAL_SECONDS = 5
 DEFAULT_AUTH_CHECK_INTERVAL_SECONDS = 60
@@ -138,6 +138,83 @@ def _check_browser_and_auth(cdp_url: str, provider: str) -> str:
         playwright.stop()
 
 
+# ── Phase 7.4: Apply/Skip messaging notifications + resume-polling ───────
+# Both are additive to the idle branch only -- the existing run-claim/
+# process/recover path above is completely untouched. A messaging failure
+# (provider not configured, network error) must never disrupt real Dice
+# application processing, so every notification call is wrapped and
+# logged, never raised.
+
+
+def _configured_attention_providers() -> list:
+    """Whichever of Telegram/iMessage have their required env vars set --
+    both, one, or neither. Imported lazily so this module never requires
+    `requests`-based Telegram calls or macOS-only iMessage/sqlite3 access
+    to simply be imported."""
+    providers: list = []
+    if os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"):
+        from attention.providers.telegram import TelegramProvider
+
+        providers.append(TelegramProvider())
+    if os.environ.get("IMESSAGE_CONTACT"):
+        from attention.providers.imessage import IMessageProvider
+
+        providers.append(IMessageProvider())
+    return providers
+
+
+def _notify_result(providers: list, result) -> None:
+    if not providers or result.application_id is None:
+        return
+    import attention.service as attention_service
+
+    for provider in providers:
+        try:
+            if result.stop_reason == StopReason.NEEDS_INPUT:
+                attention_service.notify_next_missing_question(provider, result.application_id)
+            elif result.stop_reason == StopReason.VERIFIED_SUBMITTED:
+                attention_service.notify_submission_success(provider, result.application_id)
+        except Exception as exc:  # noqa: BLE001 - a messaging failure must never crash the daemon
+            print(f"Attention notification failed ({provider.channel}): {exc}")
+
+
+def _find_resumable_application(candidate_id: str) -> dict | None:
+    """The one NEEDS_INPUT application (if any) for this candidate whose
+    every open intervention has already been CONFIRMed over messaging --
+    what attention.service.handle_confirm() hands back to the daemon
+    rather than resuming the browser synchronously from inside a message
+    handler. Returns None (not an exception) when nothing is resumable --
+    the normal, common case on most idle polls.
+
+    Deliberately excludes any application whose run is STOPPED -- the
+    existing run-claim path (run_registry.claim_next_pending_run) already
+    respects that a STOPPED run must never be touched again; this
+    resume-polling path is new and must uphold the exact same guarantee,
+    never resuming an application just because its own status happens to
+    be NEEDS_INPUT with no open interventions left."""
+    from db.intervention_repository import ApplicationReadiness, compute_application_readiness
+    from db.supabase_client import get_supabase_client
+
+    client = get_supabase_client()
+    rows = (
+        client.table("applications")
+        .select("id, run_id")
+        .eq("candidate_id", candidate_id)
+        .eq("status", "NEEDS_INPUT")
+        .execute()
+        .data
+        or []
+    )
+    for row in rows:
+        if row.get("run_id"):
+            run = client.table("application_runs").select("status").eq("id", row["run_id"]).execute().data
+            if run and run[0]["status"] == "STOPPED":
+                continue
+        if compute_application_readiness(row["id"]) == ApplicationReadiness.RESUMABLE:
+            return row
+    return None
+
+
 def run_daemon(
     worker_id: str,
     cdp_url: str | None = None,
@@ -186,6 +263,48 @@ def run_daemon(
 
         run = run_registry.claim_next_pending_run(worker_id)
         if run is None:
+            candidate_id = os.environ.get("DICEPILOT_CANDIDATE_ID")
+            resumable = _find_resumable_application(candidate_id) if candidate_id else None
+            if resumable is not None:
+                # Every open intervention on this application was already
+                # CONFIRMed over messaging (attention.service.handle_
+                # confirm never touches the browser itself) -- this is
+                # where that deferred resume actually happens, on the
+                # daemon's own poll, using the exact same connect/
+                # recover/heartbeat pattern as a fresh run below.
+                try:
+                    playwright, page = _connect_with_recovery(
+                        cdp_url, provider, max_attempts=max_recovery_attempts, backoff_seconds=recovery_backoff_seconds
+                    )
+                except Exception:
+                    last_status = "BROWSER_DISCONNECTED"
+                    last_check_at = time.monotonic()
+                    run_registry.write_heartbeat(worker_id, status=last_status)
+                    time.sleep(poll_interval)
+                    continue
+
+                last_status = "ONLINE"
+                last_check_at = time.monotonic()
+                run_registry.write_heartbeat(worker_id, status=last_status)
+                resume_policy = submission_policy_override
+                if resume_policy is None and resumable.get("run_id"):
+                    resume_policy = SubmissionPolicy(run_registry.get_run(resumable["run_id"])["submission_policy"])
+                try:
+                    result = resume_needs_input_application(
+                        page, resumable["id"], worker_id,
+                        submission_policy=resume_policy or SubmissionPolicy.REQUIRE_CONFIRMATION,
+                        resume_path=resume_path,
+                    )
+                    _notify_result(_configured_attention_providers(), result)
+                except Exception:
+                    run_registry.write_heartbeat(worker_id, status="RECOVERING")
+                    if resumable.get("run_id"):
+                        reconciled = run_registry.reconcile_run_after_disconnect(resumable["run_id"])
+                        print(f"Recovered from a mid-resume browser disconnect on application {resumable['id']}: {reconciled}")
+                finally:
+                    playwright.stop()
+                continue
+
             now = time.monotonic()
             if now - last_check_at >= auth_check_interval:
                 last_status = _check_browser_and_auth(cdp_url, provider)
@@ -215,7 +334,10 @@ def run_daemon(
         last_check_at = time.monotonic()
         run_registry.write_heartbeat(worker_id, status=last_status)
         try:
-            run_worker_for_run(page, run["id"], worker_id, submission_policy=policy, resume_path=resume_path)
+            summary = run_worker_for_run(page, run["id"], worker_id, submission_policy=policy, resume_path=resume_path)
+            providers = _configured_attention_providers()
+            for result in getattr(summary, "processed", None) or []:
+                _notify_result(providers, result)
         except Exception:
             run_registry.write_heartbeat(worker_id, status="RECOVERING")
             reconciled = run_registry.reconcile_run_after_disconnect(run["id"])

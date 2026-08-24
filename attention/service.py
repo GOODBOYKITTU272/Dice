@@ -1,0 +1,284 @@
+"""Phase 7.4: the Apply/Skip/Confirm/Edit domain state machine. Every
+function here is transport-neutral -- takes an AttentionProvider (never a
+concrete Telegram/iMessage class by name) and plain ids, never a
+Telegram update or an iMessage row. This is the ONLY place Apply/Skip/
+Confirm/Edit business logic is allowed to live (see attention/__init__.py).
+
+Never calls into Playwright/dice_browser directly, and never submits a
+Dice application synchronously from an inbound-event handler -- Apply
+and Confirm only ever flip Supabase state (QUEUED / resolved
+intervention); the existing worker daemon (dice_browser/worker_daemon.py)
+is what actually drives the browser, on its own poll loop, unchanged.
+"""
+from __future__ import annotations
+
+import run_registry
+from attention.events import (
+    already_processed_inbound,
+    already_sent_outbound,
+    latest_active_question_id,
+    latest_inbound_answer,
+    record_inbound,
+    record_outbound,
+)
+from attention.models import AttentionAction, MessageType, NormalizedEvent
+from attention.providers.base import AttentionProvider
+from db.application_repository import get_application, get_dice_job, update_application_status
+from db.intervention_repository import (
+    ApplicationReadiness,
+    compute_application_readiness,
+    get_open_intervention,
+    list_open_interventions,
+    resolve_question_intervention,
+)
+
+
+class UnresolvableEventError(RuntimeError):
+    """Raised when an inbound event can't be attributed to an
+    application/question (e.g. a CONFIRM with nothing pending). Callers
+    should treat this as "ignore the message", never as a reason to guess."""
+
+
+# ── outbound ────────────────────────────────────────────────────────────
+
+
+def notify_job_offer(provider: AttentionProvider, application_id: str) -> None:
+    """Idempotent: a second call for the same application+channel is a
+    no-op (the DB's own partial unique index would reject a duplicate
+    insert regardless, but checking first avoids sending the message
+    twice while the DB write is still in flight)."""
+    if already_sent_outbound(application_id, provider.channel, MessageType.JOB_OFFER.value):
+        return
+    application = get_application(application_id)
+    job = get_dice_job(application["dice_job_id"])
+    external_id = provider.send_job_offer(application, job)
+    record_outbound(application_id, application["candidate_id"], provider.channel, MessageType.JOB_OFFER.value, external_id)
+
+
+def notify_next_missing_question(provider: AttentionProvider, application_id: str) -> None:
+    """Sends exactly one question -- the oldest OPEN intervention that
+    hasn't already been asked over this channel. No-ops if none are
+    open (nothing missing) or if the current one was already asked
+    (never resend the same question while waiting on its answer)."""
+    open_interventions = list_open_interventions(application_id)
+    if not open_interventions:
+        return
+    already_asked_id = latest_active_question_id(application_id)
+    for intervention in open_interventions:
+        question_id = (intervention.get("options") or {}).get("question_id")
+        if question_id and question_id == already_asked_id:
+            return  # already waiting on this one's answer -- do not re-send
+        application = get_application(application_id)
+        external_id = provider.send_missing_question(application_id, intervention)
+        record_outbound(
+            application_id,
+            application["candidate_id"],
+            provider.channel,
+            MessageType.MISSING_QUESTION.value,
+            external_id,
+            payload={"question_id": question_id},
+        )
+        return
+
+
+def notify_submission_success(provider: AttentionProvider, application_id: str) -> None:
+    if already_sent_outbound(application_id, provider.channel, MessageType.SUBMISSION_SUCCESS.value):
+        return
+    application = get_application(application_id)
+    job = get_dice_job(application["dice_job_id"])
+    external_id = provider.send_submission_success(application, job)
+    record_outbound(application_id, application["candidate_id"], provider.channel, MessageType.SUBMISSION_SUCCESS.value, external_id)
+
+
+def notify_submission_failure(provider: AttentionProvider, application_id: str, reason: str) -> None:
+    if already_sent_outbound(application_id, provider.channel, MessageType.SUBMISSION_FAILURE.value):
+        return
+    application = get_application(application_id)
+    job = get_dice_job(application["dice_job_id"])
+    external_id = provider.send_submission_failure(application, job, reason)
+    record_outbound(application_id, application["candidate_id"], provider.channel, MessageType.SUBMISSION_FAILURE.value, external_id)
+
+
+# ── inbound ─────────────────────────────────────────────────────────────
+
+
+def handle_apply(application_id: str) -> None:
+    """Apply is authorization to complete and submit -- nothing more.
+    Idempotent by construction: a second Apply finds the application no
+    longer AWAITING_USER_DECISION and no-ops. Never opens a browser here
+    -- QUEUED is the exact same status/claim mechanism the existing Jobs-
+    selection UI's "Start Applications" button already uses; the worker
+    daemon picks this run up on its own next poll."""
+    application = get_application(application_id)
+    if application["status"] != "AWAITING_USER_DECISION":
+        return
+    update_application_status(application_id, "QUEUED")
+    run_registry.create_run([application_id], candidate_id=application["candidate_id"], submission_policy="AUTHORIZED_AUTONOMOUS")
+
+
+def handle_skip(application_id: str) -> None:
+    """Idempotent: a second Skip finds the application already SKIPPED
+    (or past that point) and no-ops."""
+    application = get_application(application_id)
+    if application["status"] != "AWAITING_USER_DECISION":
+        return
+    update_application_status(application_id, "SKIPPED")
+
+
+def handle_answer(provider: AttentionProvider, event: NormalizedEvent) -> None:
+    """Records the raw answer as PENDING (an inbound attention_events row
+    only -- interventions.answer is untouched) and asks the user to
+    Confirm/Edit. Never itself resolves the intervention -- only
+    handle_confirm does that."""
+    if already_processed_inbound(event.channel, event.external_message_id):
+        return
+    application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT")
+    question_id = event.question_id or latest_active_question_id(application_id)
+    if question_id is None:
+        raise UnresolvableEventError("no pending question to attribute this answer to")
+
+    application = get_application(application_id)
+    record_inbound(
+        application_id,
+        application["candidate_id"],
+        event.channel,
+        MessageType.ANSWER_CONFIRMATION.value,
+        AttentionAction.ANSWER.value,
+        event.external_message_id,
+        payload={"question_id": question_id, "raw_answer": event.raw_text},
+    )
+    external_id = provider.send_answer_confirmation(application_id, question_id, event.raw_text)
+    record_outbound(
+        application_id,
+        application["candidate_id"],
+        event.channel,
+        MessageType.ANSWER_CONFIRMATION.value,
+        external_id,
+        payload={"question_id": question_id},
+    )
+
+
+def handle_confirm(provider: AttentionProvider, event: NormalizedEvent) -> None:
+    """"This answer is correct for this application" -- not "remember
+    this forever". Reuse eligibility is entirely find_reusable_answer()'s
+    existing exact-question_id policy (dice_browser.worker already
+    checks it before ever creating an intervention in the first place);
+    nothing here decides reusability. Never opens a browser or resumes
+    the application synchronously -- once every open intervention is
+    resolved, the worker daemon's own poll loop picks the application
+    back up (dice_browser/worker_daemon.py's RESUMABLE check)."""
+    if already_processed_inbound(event.channel, event.external_message_id):
+        return
+    application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT")
+    question_id = event.question_id or latest_active_question_id(application_id)
+    if question_id is None:
+        raise UnresolvableEventError("no pending question to confirm")
+
+    raw_answer = latest_inbound_answer(application_id, question_id)
+    if raw_answer is None:
+        raise UnresolvableEventError("no pending answer to confirm")
+
+    intervention = get_open_intervention(application_id, question_id)
+    if intervention is None:
+        raise UnresolvableEventError(f"no open intervention for question_id={question_id!r}")
+
+    application = get_application(application_id)
+    resolve_question_intervention(intervention["id"], raw_answer, source="candidate_via_messaging")
+    record_inbound(
+        application_id,
+        application["candidate_id"],
+        event.channel,
+        MessageType.ANSWER_CONFIRMATION.value,
+        AttentionAction.CONFIRM.value,
+        event.external_message_id,
+        payload={"question_id": question_id},
+    )
+
+    if compute_application_readiness(application_id) != ApplicationReadiness.RESUMABLE:
+        notify_next_missing_question(provider, application_id)
+    # else: fully resolved -- worker daemon resumes it on its own poll.
+
+
+def handle_edit(provider: AttentionProvider, event: NormalizedEvent) -> None:
+    """Discards the pending (unconfirmed) answer -- it was never written
+    to interventions.answer, so there's nothing to undo there -- and asks
+    the same question again."""
+    if already_processed_inbound(event.channel, event.external_message_id):
+        return
+    application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT")
+    question_id = event.question_id or latest_active_question_id(application_id)
+    if question_id is None:
+        raise UnresolvableEventError("no pending question to edit")
+
+    application = get_application(application_id)
+    record_inbound(
+        application_id,
+        application["candidate_id"],
+        event.channel,
+        MessageType.ANSWER_CONFIRMATION.value,
+        AttentionAction.EDIT.value,
+        event.external_message_id,
+        payload={"question_id": question_id},
+    )
+    intervention = get_open_intervention(application_id, question_id)
+    if intervention is not None:
+        external_id = provider.send_missing_question(application_id, intervention)
+        record_outbound(
+            application_id,
+            application["candidate_id"],
+            event.channel,
+            MessageType.MISSING_QUESTION.value,
+            external_id,
+            payload={"question_id": question_id},
+        )
+
+
+def handle_event(provider: AttentionProvider, event: NormalizedEvent) -> None:
+    """Single dispatch entry point both providers' inbound handlers call
+    into -- keeps the action->handler mapping in exactly one place."""
+    if event.action == AttentionAction.APPLY:
+        handle_apply(event.application_id or _resolve_pending_application_id("AWAITING_USER_DECISION"))
+    elif event.action == AttentionAction.SKIP:
+        handle_skip(event.application_id or _resolve_pending_application_id("AWAITING_USER_DECISION"))
+    elif event.action == AttentionAction.ANSWER:
+        handle_answer(provider, event)
+    elif event.action == AttentionAction.CONFIRM:
+        handle_confirm(provider, event)
+    elif event.action == AttentionAction.EDIT:
+        handle_edit(provider, event)
+
+
+def _default_candidate_id() -> str:
+    import os
+
+    candidate_id = os.environ.get("DICEPILOT_CANDIDATE_ID")
+    if not candidate_id:
+        raise UnresolvableEventError("DICEPILOT_CANDIDATE_ID is not configured")
+    return candidate_id
+
+
+def _resolve_pending_application_id(status: str) -> str:
+    """V1 is explicitly single-candidate; a channel with no structured
+    correlation (iMessage's plain-text replies) always means "the one
+    candidate this deployment is configured for". Resolves to that
+    candidate's most recently created application currently in `status`
+    -- there is only ever meant to be one (job offers and missing
+    questions are both strictly sequential), but "most recent" is the
+    well-defined tiebreaker if that invariant is ever violated."""
+    from db.supabase_client import get_supabase_client
+
+    candidate_id = _default_candidate_id()
+    client = get_supabase_client()
+    rows = (
+        client.table("applications")
+        .select("id, created_at")
+        .eq("candidate_id", candidate_id)
+        .eq("status", status)
+        .execute()
+        .data
+        or []
+    )
+    if not rows:
+        raise UnresolvableEventError(f"no {status} application for candidate {candidate_id!r}")
+    rows.sort(key=lambda r: r.get("created_at") or "")
+    return rows[-1]["id"]

@@ -268,6 +268,32 @@ def get_resolved_answers(application_id: str) -> dict[str, Any]:
 _NEVER_REUSE_QUESTION_IDS = {"workAuthorization"}
 
 
+def get_open_intervention(application_id: str, question_id: str) -> dict[str, Any] | None:
+    """Public wrapper for external consumers (e.g. attention/service.py)
+    -- same lookup create_or_get_question_intervention() already uses
+    internally, exposed without reaching into a leading-underscore
+    helper across a package boundary."""
+    return _find_open_question_intervention(application_id, question_id)
+
+
+def list_open_interventions(application_id: str) -> list[dict[str, Any]]:
+    """All OPEN interventions for one application, oldest first --
+    attention/service.py uses this to find "the next unasked question"
+    for the sequential missing-question flow."""
+    client = get_supabase_client()
+    rows = (
+        client.table("interventions")
+        .select("*")
+        .eq("application_id", application_id)
+        .eq("status", "OPEN")
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+    return rows
+
+
 def find_reusable_answer(candidate_id: str, question_id: str) -> Any | None:
     """Returns the most recent human-given answer this candidate has
     already provided for the exact same question_id on a DIFFERENT

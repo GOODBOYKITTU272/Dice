@@ -18,6 +18,13 @@ UNIQUE_VIOLATION = "23505"
 # From Backend Schema doc §12. Enforced here so an invalid transition never
 # reaches the database silently disguised as a normal update.
 STATUS_TRANSITIONS: dict[str, set[str]] = {
+    # Phase 7.4: Apply/Skip messaging flow. AWAITING_USER_DECISION ->
+    # QUEUED (Apply) deliberately reuses the existing QUEUED status/claim
+    # mechanism unchanged -- Apply never invents a parallel "processing"
+    # concept. SKIPPED is terminal; the candidate_id+dice_job_id unique
+    # constraint means a skipped job is never re-offered.
+    "AWAITING_USER_DECISION": {"QUEUED", "SKIPPED"},
+    "SKIPPED": set(),
     "QUEUED": {"PROCESSING"},
     "PROCESSING": {"NEEDS_INPUT", "SUBMITTING", "FAILED_RETRYABLE", "FAILED"},
     "NEEDS_INPUT": {"PROCESSING", "FAILED"},
@@ -94,6 +101,29 @@ def enqueue_application(candidate_id: str, dice_job_id: str) -> dict[str, Any]:
         result = (
             client.table("applications")
             .insert({"candidate_id": candidate_id, "dice_job_id": dice_job_id})
+            .execute()
+        )
+    except Exception as exc:
+        if _is_unique_violation(exc):
+            raise DuplicateApplicationError(
+                f"application already exists for candidate={candidate_id} job={dice_job_id}"
+            ) from exc
+        raise
+    return result.data[0]
+
+
+def create_job_offer(candidate_id: str, dice_job_id: str) -> dict[str, Any]:
+    """Create an AWAITING_USER_DECISION application row for (candidate_id,
+    dice_job_id) -- the messaging-driven Apply/Skip flow's entry point,
+    parallel to enqueue_application() (which still defaults to QUEUED,
+    unchanged, for the existing Jobs-selection UI flow). Same duplicate
+    handling: never silently re-offers a job the candidate already has a
+    row for (already offered, already skipped, or already applied)."""
+    client = get_supabase_client()
+    try:
+        result = (
+            client.table("applications")
+            .insert({"candidate_id": candidate_id, "dice_job_id": dice_job_id, "status": "AWAITING_USER_DECISION"})
             .execute()
         )
     except Exception as exc:
