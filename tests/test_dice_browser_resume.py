@@ -50,6 +50,18 @@ def test_upload_resume_missing_file_before_page_interaction(page):
     assert result.reason == "RESUME_FILE_MISSING"
 
 
+def test_upload_resume_accepts_plain_string_path(page):
+    # Real live finding (2026-08-24): --resume-path is always a plain str
+    # from argparse (worker.py/worker_daemon.py never wrap it in Path()),
+    # and that str flows straight through to upload_resume() unchanged.
+    # A bare AttributeError on path.exists() crashed every real CLI
+    # invocation that ever passed --resume-path -- never caught before
+    # because every existing test already passed a pathlib.Path fixture.
+    page.set_content('<html><body><p>Upload your resume</p><input type="file" id="fsp-fileUpload"></body></html>')
+    result = upload_resume(page, resume_path=str(DUMMY_RESUME))
+    assert result.reason != "RESUME_FILE_MISSING"
+
+
 # ── existing-resume detection: TRUE / FALSE / UNKNOWN ────────────────────
 
 
@@ -93,6 +105,28 @@ def test_detect_existing_resume_false_when_only_upload_prompt_present(page):
     assert detect_existing_resume(page) is False
 
 
+def test_detect_existing_resume_false_when_change_text_only_in_hidden_unrelated_elements(page):
+    # Real live finding (2026-08-24): a real Dice apply wizard's "no
+    # resume on file" step still has hidden, unrelated DOM elements
+    # containing the substring "change" -- a profile-visibility promo
+    # card ("...when you change your profile to visible...") and a
+    # cached job-description snippet -- both display:none. A loose
+    # get_by_text("Change") match (with no visibility check) counted
+    # these and returned True, blocking the real upload entirely on a
+    # brand-new account that has never had a resume on file.
+    page.set_content(
+        """
+        <html><body>
+        <div style="display:none">Go visible! ...when you change your profile to visible...</div>
+        <p style="display:none">Trigyn's direct government client needs someone to change...</p>
+        <p>Upload your resume</p>
+        <input type="file" id="fsp-fileUpload">
+        </body></html>
+        """
+    )
+    assert detect_existing_resume(page) is False
+
+
 def test_detect_existing_resume_unknown_when_ambiguous(page):
     page.set_content("<html><body><p>Some unrelated application step.</p></body></html>")
     assert detect_existing_resume(page) is None
@@ -114,6 +148,44 @@ def test_upload_attempted_when_no_existing_resume(page):
     assert result.existing_resume_detected is False
     assert result.uploaded is False
     assert result.reason.startswith("UPLOAD_FAILED")
+
+
+def test_upload_finds_resume_input_via_aria_describedby_on_real_page_shape(page):
+    # Real live finding (2026-08-24, brand-new-account closure): reproduces
+    # the ACTUAL real-wizard DOM shape byte-for-byte (captured live via
+    # CDP), not a simplified approximation -- the first fixture attempt at
+    # this used a simplified shape that passed even on the old, broken
+    # code. The real page's "Cover letter" text matches THREE nested
+    # elements (an outer card div whose aggregated textContent also
+    # contains "Cover letter", plus its own label span) -- get_by_text(
+    # "Cover letter").first lands on an ancestor wrapper, not the label,
+    # which broke the old DOM-position-relative-to-text heuristic
+    # entirely (returned None despite two good candidates existing).
+    # aria-describedby ("resume-description" / "cover letter-description")
+    # is the one unambiguous, deterministic signal actually present.
+    page.set_content(
+        """
+        <html><body>
+        <form>
+        <h2>Resume &amp; Cover Letter</h2>
+        <div class="my-2 rounded-lg border p-5 mb-6">
+          <div class="mb-2 inline-flex"><span>Resume <span class="text-danger">*</span></span></div>
+          <button type="button">Upload your resume</button>
+          <div id="resume-description">File types supported .pdf, .doc, .docx, .txt, .rtf up to 2MB</div>
+        </div>
+        <input class="sr-only" accept=".pdf, .doc, .docx, .txt, .rtf" aria-describedby="resume-description" type="file">
+        <div class="my-2 rounded-lg border p-5 mb-6">
+          <div class="mb-2 inline-flex"><span>Cover letter </span><div class="ml-auto"><i>Optional</i></div></div>
+          <button type="button">Upload your cover letter</button>
+          <div id="cover letter-description">File types supported .pdf, .doc, .docx, .txt, .rtf up to 2MB</div>
+        </div>
+        <input class="sr-only" accept=".pdf, .doc, .docx, .txt, .rtf" aria-describedby="cover letter-description" type="file">
+        </form>
+        </body></html>
+        """
+    )
+    result = upload_resume(page, resume_path=DUMMY_RESUME)
+    assert result.reason != "UPLOAD_FAILED: no resume file input found"
 
 
 _REAL_FILE_CARD_CLASS = "my-2 rounded-lg border border-gray-200 bg-white p-4 shadow-xs mb-6"

@@ -11,7 +11,7 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 from dice_browser.models import FieldType, QuestionExtractionStatus, QuestionStatus, RequiredState
-from dice_browser.questions import extract_questions, is_questions_screen, is_review_screen
+from dice_browser.questions import _resolve_by_id, extract_questions, is_questions_screen, is_review_screen
 
 
 @pytest.fixture(scope="module")
@@ -259,6 +259,154 @@ def test_is_questions_screen_false_for_review_page(page):
     assert is_questions_screen(page) is False
 
 
+# ── "Additional Information" screen (2026-08-24 live finding) ────────────
+# Real live shape: Java Developer @ Yashnee Tech Solutions (job
+# 3f63223a-1dc9-4af9-914c-4ed01e625d44), Step 2 of 4 -- a DIFFERENT
+# heading ("Additional Information") from the "Application Questions"
+# screen above, with a visually-hidden-but-accessible native <select>
+# (custom listbox button as its visible proxy) and a plain text <input>
+# with role="combobox" (Google Places city autocomplete). Captured
+# byte-for-byte via live CDP inspection, trimmed of purely cosmetic
+# Tailwind classes.
+
+_ADDITIONAL_INFO_SCREEN_SHELL = """
+<html><body>
+<div>Step 2 of 4</div>
+<h2>Additional Information</h2>
+{extra}
+<button>Back</button>
+<button>Next</button>
+</body></html>
+"""
+
+
+def _additional_info_page(extra: str) -> str:
+    return _ADDITIONAL_INFO_SCREEN_SHELL.format(extra=extra)
+
+
+_WORK_AUTH_SELECT_FIXTURE = """
+<div class="group" data-rac="" data-required="true">
+  <div><span id="waLabel" slot="label">Work Authorization <span>*</span></span></div>
+  <button aria-labelledby="waValue waLabel" aria-haspopup="listbox" aria-expanded="false">
+    <span id="waValue">Prefer Not to Answer</span>
+  </button>
+  <div aria-hidden="true" data-testid="hidden-select-container" style="clip: rect(0px,0px,0px,0px); height:1px; width:1px; position:fixed;">
+    <label><select tabindex="-1" name="workAuthorization">
+      <option value="" label="&nbsp;">&nbsp;</option>
+      <option value="US_CITIZEN">US Citizen</option>
+      <option value="CANADIAN_CITIZEN">Canadian Citizen</option>
+      <option value="HAVE_H1_VISA">Have H1 Visa</option>
+      <option value="NEED_H1_VISA">Need H1 Visa</option>
+      <option value="GREEN_CARD_HOLDER">Green Card Holder</option>
+      <option value="TN_PERMIT_HOLDER">TN Permit Holder</option>
+      <option value="EMPLOYMENT_AUTH_DOCUMENT">Employment Auth Document</option>
+      <option selected value="PREFER_NOT_TO_ANSWER">Prefer Not to Answer</option>
+    </select></label>
+  </div>
+</div>
+"""
+
+_CITY_TEXT_INPUT_FIXTURE = """
+<div class="seui-autocomplete group" data-rac="" data-required="true">
+  <div><label id="cityLabel" for="cityInput" slot="label">What is your current city of residence? <span>*</span></label></div>
+  <div role="group" data-rac="">
+    <input aria-labelledby="cityLabel" aria-required="true" id="cityInput" role="combobox" name="candidateLocation"
+           placeholder="Enter your city or postal code (e.g., Denver, CO or 80202)">
+  </div>
+</div>
+"""
+
+
+def test_resolve_by_id_concatenates_space_separated_ids(page):
+    # Real live finding (2026-08-24): aria-labelledby (ARIA spec-legal)
+    # can be a space-separated list of ids -- the real Work Authorization
+    # button's aria-labelledby was "waValue waLabel", two ids. The old
+    # implementation passed this straight into a CSS id selector
+    # (#waValue waLabel), which CSS parses as a descendant combinator,
+    # not a single element -- resolving to nothing.
+    page.set_content('<span id="a">Hello</span><span id="b">World</span>')
+    assert _resolve_by_id(page, "a b") == "Hello World"
+
+
+def test_is_questions_screen_true_for_additional_information_heading(page):
+    page.set_content(_additional_info_page(_WORK_AUTH_SELECT_FIXTURE))
+    assert is_questions_screen(page) is True
+
+
+def test_select_extraction_real_shape(page):
+    # Real live finding (2026-08-24): the real page genuinely has
+    # PREFER_NOT_TO_ANSWER pre-selected on the underlying native <select>
+    # from render (Dice's own app default, not an unfilled empty value) --
+    # the button's aria-labelledby legitimately references BOTH the
+    # current-value span and the label span (standard ARIA combobox
+    # accessible-name pattern: "value, label"), which a naive full
+    # concatenation wrongly folded into the prompt text itself
+    # ("Prefer Not to Answer Work Authorization *"). Prompt resolution
+    # must scope to the [slot='label'] element specifically.
+    page.set_content(_additional_info_page(_WORK_AUTH_SELECT_FIXTURE))
+    result = extract_questions(page)
+    assert result.status == QuestionExtractionStatus.QUESTIONS_PRESENT
+    assert len(result.questions) == 1
+    q = result.questions[0]
+    assert q.field_type == FieldType.SELECT
+    assert q.question_id == "workAuthorization"
+    assert q.prompt == "Work Authorization *"
+    assert q.options == (
+        "US Citizen", "Canadian Citizen", "Have H1 Visa", "Need H1 Visa",
+        "Green Card Holder", "TN Permit Holder", "Employment Auth Document", "Prefer Not to Answer",
+    )
+    assert q.current_value == "Prefer Not to Answer"
+    assert q.status == QuestionStatus.ALREADY_ANSWERED
+
+
+def test_select_needs_input_when_truly_unselected(page):
+    page.set_content(_additional_info_page(_WORK_AUTH_SELECT_FIXTURE.replace(" selected ", " ")))
+    q = extract_questions(page).questions[0]
+    assert q.current_value is None
+    assert q.status == QuestionStatus.NEEDS_INPUT
+
+
+def test_select_already_answered_status(page):
+    page.set_content(
+        _additional_info_page(
+            _WORK_AUTH_SELECT_FIXTURE
+            .replace(" selected ", " ")
+            .replace('<option value="HAVE_H1_VISA">', '<option selected value="HAVE_H1_VISA">')
+        )
+    )
+    q = extract_questions(page).questions[0]
+    assert q.current_value == "Have H1 Visa"
+    assert q.status == QuestionStatus.ALREADY_ANSWERED
+
+
+def test_text_input_extraction_real_shape(page):
+    page.set_content(_additional_info_page(_CITY_TEXT_INPUT_FIXTURE))
+    result = extract_questions(page)
+    assert result.status == QuestionExtractionStatus.QUESTIONS_PRESENT
+    assert len(result.questions) == 1
+    q = result.questions[0]
+    assert q.field_type == FieldType.TEXT_INPUT
+    assert q.question_id == "candidateLocation"
+    assert q.prompt == "What is your current city of residence? *"
+    assert q.current_value is None
+    assert q.status == QuestionStatus.NEEDS_INPUT
+
+
+def test_text_input_already_answered_status(page):
+    page.set_content(_additional_info_page(_CITY_TEXT_INPUT_FIXTURE.replace('placeholder=', 'value="West Haven, CT" placeholder=')))
+    q = extract_questions(page).questions[0]
+    assert q.current_value == "West Haven, CT"
+    assert q.status == QuestionStatus.ALREADY_ANSWERED
+
+
+def test_select_and_text_input_both_extracted_together(page):
+    page.set_content(_additional_info_page(_WORK_AUTH_SELECT_FIXTURE + _CITY_TEXT_INPUT_FIXTURE))
+    result = extract_questions(page)
+    assert result.status == QuestionExtractionStatus.QUESTIONS_PRESENT
+    field_types = {q.field_type for q in result.questions}
+    assert field_types == {FieldType.SELECT, FieldType.TEXT_INPUT}
+
+
 # 1. real-shaped yes/no radiogroup extraction
 def test_radiogroup_extraction_real_shape(page):
     page.set_content(_questions_page(_ONSITE_RADIOGROUP_FIXTURE))
@@ -394,9 +542,14 @@ def test_salary_question_classified_needs_input(page):
 # already covered above by the Phase 4D-A tests in this same file.
 
 
-# 20. unknown visible control -> UNSUPPORTED, not silently ignored
+# 20. unknown visible control -> UNSUPPORTED, not silently ignored.
+# Was <input type="text"> until 2026-08-24, when TEXT_INPUT extraction was
+# added on real live evidence (see FieldType's docstring) -- text inputs
+# are now a supported, extracted type, so this uses a genuinely still-
+# unhandled type (date) to keep validating the "never silently drop an
+# unknown control" guarantee this test exists for.
 def test_unsupported_control_classified_explicitly(page):
-    page.set_content(_questions_page('<label>Years of experience</label><input type="text" id="yoe">'))
+    page.set_content(_questions_page('<label>Available start date</label><input type="date" id="startdate">'))
     result = extract_questions(page)
     assert result.status == QuestionExtractionStatus.QUESTIONS_PRESENT
     assert len(result.questions) == 1

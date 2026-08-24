@@ -17,7 +17,19 @@ SUBMISSION_SOURCE = (DICE_BROWSER_DIR / "submission.py").read_text(encoding="utf
 
 
 def test_wizard_navigation_clicks_next_exactly_once():
-    assert WIZARD_NAV_SOURCE.count(".click()") == 1
+    # Was == 1 until 2026-08-24: real live evidence (job
+    # 3f63223a-1dc9-4af9-914c-4ed01e625d44 Step 3) showed the real
+    # React-Aria radio control's gesture handling lives on its own
+    # data-rac wrapper, not the native input -- a plain .check() (even
+    # force=True) dispatched but never actually toggled it. _fill_radio's
+    # wrapper.click() is a second, legitimate click site, but it is an
+    # ANSWER-FILLING click (same category as the existing .check()/
+    # .fill()/.select_option() calls elsewhere in this module), scoped to
+    # an already-deterministically-resolved radio target -- never Next,
+    # Submit, or Review. test_wizard_navigation_never_clicks_submit_or_
+    # review below is the guard that actually matters here, and it still
+    # passes unchanged.
+    assert WIZARD_NAV_SOURCE.count(".click()") == 2
 
 
 def test_wizard_navigation_never_clicks_submit_or_review():

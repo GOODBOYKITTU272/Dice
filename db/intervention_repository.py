@@ -256,3 +256,52 @@ def get_resolved_answers(application_id: str) -> dict[str, Any]:
         if question_id is not None:
             resolved[question_id] = row.get("answer")
     return resolved
+
+
+# Deliberately excluded from reuse even though it IS a stable,
+# platform-standard question_id Dice repeats across every job posting --
+# consistent with this project's own established policy
+# (dice.candidate_adapter._SENSITIVE_FIELDS) of treating work-
+# authorization/visa status as something a human actively reconfirms on
+# every application, never something silently propagated from a prior
+# answer.
+_NEVER_REUSE_QUESTION_IDS = {"workAuthorization"}
+
+
+def find_reusable_answer(candidate_id: str, question_id: str) -> Any | None:
+    """Returns the most recent human-given answer this candidate has
+    already provided for the exact same question_id on a DIFFERENT
+    application, or None if there's no prior answer to reuse.
+
+    Relies entirely on question_id equality -- nothing here infers which
+    question TYPES are "safe" to reuse. Dice repeats the same literal
+    question_id (its own DOM `name` attribute) across different job
+    postings only for its own standardized fields (e.g.
+    "candidateLocation"); a job-specific custom question gets a fresh,
+    job-scoped UUID every time (dice_browser.questions._question_id), so
+    this naturally never matches -- and therefore never reuses -- across
+    genuinely different, job-varying questions like expected salary or
+    onsite willingness."""
+    if question_id in _NEVER_REUSE_QUESTION_IDS:
+        return None
+
+    client = get_supabase_client()
+    application_ids = {
+        row["id"]
+        for row in client.table("applications").select("id").eq("candidate_id", candidate_id).execute().data
+    }
+    if not application_ids:
+        return None
+
+    # .eq()-only, sorted client-side rather than .in_()/.order() -- V1's
+    # per-candidate intervention volume is small, and this keeps the
+    # query portable across the fake in-memory Supabase client tests use
+    # for offline coverage (which only implements .select()/.eq()).
+    rows = client.table("interventions").select("answer, options, application_id, resolved_at").eq("status", "ANSWERED").execute().data or []
+    matches = [
+        row for row in rows if row.get("application_id") in application_ids and _question_id_of(row) == question_id
+    ]
+    if not matches:
+        return None
+    matches.sort(key=lambda row: row.get("resolved_at") or "", reverse=True)
+    return matches[0].get("answer")

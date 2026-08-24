@@ -40,6 +40,12 @@ from dice_browser.models import (
 
 _REVIEW_HEADING_TEXT = "Review your application"
 _QUESTIONS_HEADING_TEXT = "Application Questions"
+# Real live finding (2026-08-24, job 3f63223a-1dc9-4af9-914c-4ed01e625d44):
+# the same wizard shows a step with genuine fillable questions (Work
+# Authorization, current city) under a DIFFERENT heading than the
+# "Application Questions" screen above -- Dice apparently varies this
+# heading per job/step configuration, not a fixed constant.
+_ADDITIONAL_INFO_HEADING_TEXT = "Additional Information"
 _STEP_INDICATOR_PATTERN = re.compile(r"Step \d+ of \d+")
 _COUNTER_PATTERN = re.compile(r"^\d+\s*/\s*\d+$")
 
@@ -68,12 +74,15 @@ def is_questions_screen(page: Page) -> bool:
     the already-finished step, which the heading-text check alone would
     misread as an active questions step. Review detection wins over any
     incidental summary text it happens to contain -- never page-wide text
-    alone."""
+    alone.
+
+    Also matches the "Additional Information" heading variant -- see
+    _ADDITIONAL_INFO_HEADING_TEXT."""
     if is_review_screen(page):
         return False
     body_text = page.inner_text("body")
     has_step = bool(_STEP_INDICATOR_PATTERN.search(body_text))
-    has_heading = _QUESTIONS_HEADING_TEXT in body_text
+    has_heading = _QUESTIONS_HEADING_TEXT in body_text or _ADDITIONAL_INFO_HEADING_TEXT in body_text
     return has_step and has_heading
 
 
@@ -86,16 +95,25 @@ def _find_candidate_controls(page: Page):
 
 
 def _resolve_by_id(page: Page, element_id: str | None) -> str | None:
+    """Resolves an aria-labelledby/aria-describedby VALUE, which per the
+    ARIA spec may legally be a space-separated list of ids (real live
+    finding, 2026-08-24: the Work Authorization button's aria-labelledby
+    was two ids) -- concatenates each resolved id's text, space-joined,
+    in listed order, skipping any id that doesn't resolve uniquely."""
     if not element_id:
         return None
-    loc = page.locator(f"#{element_id}")
-    if loc.count() != 1:
-        return None
-    try:
-        text = loc.first.inner_text().strip()
-    except Exception:
-        return None
-    return text or None
+    parts = []
+    for single_id in element_id.split():
+        loc = page.locator(f"#{single_id}")
+        if loc.count() != 1:
+            continue
+        try:
+            text = loc.first.inner_text().strip()
+        except Exception:
+            continue
+        if text:
+            parts.append(text)
+    return " ".join(parts) or None
 
 
 def _find_question_container(page: Page, control, labelledby_id: str | None):
@@ -233,6 +251,106 @@ def _extract_textarea(page: Page, control, index: int) -> QuestionField:
     )
 
 
+def _extract_select(page: Page, control, index: int) -> QuestionField:
+    """<select> extraction -- covers both a plain visible <select> and
+    the real Dice pattern of a visually-hidden-but-accessible native
+    <select> behind a custom listbox button (2026-08-24 live finding, job
+    3f63223a-1dc9-4af9-914c-4ed01e625d44 "Work Authorization"). The
+    select itself carries no aria-labelledby in that real shape -- its
+    visible proxy button does, scoped to the nearest React-Aria group
+    ancestor (mirrors _extract_radiogroup's ancestor-scoping, never a
+    page-wide search).
+
+    Real live finding (2026-08-24): the button's aria-labelledby
+    legitimately references TWO ids -- the currently-displayed value
+    span AND the label span (the standard ARIA combobox accessible-name
+    pattern, "value, label", so a screen reader announces both). Naively
+    resolving the whole aria-labelledby chain folds the current value
+    into the prompt text itself. The group's own [slot='label'] element
+    is the label alone -- prefer that; fall back to the button's
+    aria-labelledby only if no such element exists (an older Dice UI
+    variant this codebase has no live evidence for yet)."""
+    name_attr = control.get_attribute("name")
+    prompt = None
+    group = None
+    try:
+        candidate_group = control.locator("xpath=ancestor::*[@data-rac][1]")
+        if candidate_group.count() >= 1:
+            group = candidate_group.first
+    except Exception:
+        group = None
+
+    if group is not None:
+        label_slot = group.locator("[slot='label']")
+        if label_slot.count() == 1:
+            try:
+                prompt = label_slot.first.inner_text().strip() or None
+            except Exception:
+                prompt = None
+        if prompt is None:
+            trigger = group.locator("button[aria-haspopup='listbox']")
+            if trigger.count() == 1:
+                prompt = _resolve_by_id(page, trigger.first.get_attribute("aria-labelledby"))
+    if prompt is None:
+        prompt = _resolve_by_id(page, control.get_attribute("aria-labelledby"))
+
+    options = [opt.strip() for opt in control.locator("option").all_inner_texts() if opt.strip()]
+
+    try:
+        raw_value = control.input_value()
+    except Exception:
+        raw_value = None
+    current_value = None
+    if raw_value:
+        selected = control.locator(f"option[value='{raw_value}']")
+        if selected.count() == 1:
+            current_value = selected.first.inner_text().strip()
+
+    status = QuestionStatus.ALREADY_ANSWERED if current_value else QuestionStatus.NEEDS_INPUT
+
+    return QuestionField(
+        question_id=_question_id(name_attr, prompt, index),
+        prompt=prompt,
+        field_type=FieldType.SELECT,
+        required_state=RequiredState.UNKNOWN,
+        options=tuple(options) if options else None,
+        current_value=current_value,
+        helper=None,
+        status=status,
+    )
+
+
+def _extract_text_input(page: Page, control, index: int) -> QuestionField:
+    """Plain text-like <input> extraction (type=text/email/tel/untyped).
+    Real live shape (2026-08-24, same job as _extract_select): a Google
+    Places city-autocomplete input, aria-labelledby set directly on the
+    input itself -- same resolution pattern as _extract_textarea."""
+    labelledby = control.get_attribute("aria-labelledby")
+    describedby = control.get_attribute("aria-describedby")
+    prompt = _resolve_by_id(page, labelledby)
+    helper = _resolve_by_id(page, describedby) if describedby else None
+
+    name_attr = control.get_attribute("name")
+    try:
+        raw_value = control.input_value()
+    except Exception:
+        raw_value = None
+    current_value = raw_value if raw_value else None
+
+    status = QuestionStatus.ALREADY_ANSWERED if current_value else QuestionStatus.NEEDS_INPUT
+
+    return QuestionField(
+        question_id=_question_id(name_attr, prompt, index),
+        prompt=prompt,
+        field_type=FieldType.TEXT_INPUT,
+        required_state=RequiredState.UNKNOWN,
+        options=None,
+        current_value=current_value,
+        helper=helper,
+        status=status,
+    )
+
+
 def _unsupported_question(index: int) -> QuestionField:
     return QuestionField(
         question_id=f"unclassified-{index}",
@@ -253,9 +371,11 @@ def extract_questions(page: Page) -> QuestionExtractionResult:
 
     Radio inputs sharing a `name` are grouped into one RADIO question
     (live-verified: Dice groups Yes/No options this way, not via
-    <fieldset>). Every other visible candidate control (select, native
-    checkbox, custom combobox, plain text input, etc.) is UNSUPPORTED --
-    never guessed into RADIO/TEXTAREA, and never silently dropped."""
+    <fieldset>). <select> and text-like <input> (text/email/tel/untyped)
+    are also extracted (SELECT/TEXT_INPUT). Every other visible candidate
+    control (native checkbox, date input, custom combobox without a
+    backing <select>, etc.) is UNSUPPORTED -- never guessed into a
+    supported type, and never silently dropped."""
     if not (is_review_screen(page) or is_questions_screen(page)):
         return QuestionExtractionResult(status=QuestionExtractionStatus.UNKNOWN_SCREEN, questions=())
 
@@ -285,6 +405,10 @@ def extract_questions(page: Page) -> QuestionExtractionResult:
             questions.append(_extract_radiogroup(page, group_radios, index))
         elif tag == "TEXTAREA":
             questions.append(_extract_textarea(page, control, index))
+        elif tag == "SELECT":
+            questions.append(_extract_select(page, control, index))
+        elif tag == "INPUT" and ctype in ("text", "email", "tel", None):
+            questions.append(_extract_text_input(page, control, index))
         else:
             questions.append(_unsupported_question(index))
 

@@ -25,6 +25,13 @@ def resume_path_from_env() -> Path:
     return Path(configured) if configured else DEFAULT_RESUME_PATH
 
 
+def _visible_count(locator) -> int:
+    """Like locator.count(), but only counts elements actually visible on
+    the page -- a hidden (display:none) DOM element whose ordinary text
+    happens to contain a matched substring is not a real UI signal."""
+    return sum(1 for el in locator.all() if el.is_visible())
+
+
 def detect_existing_resume(page: Page) -> bool | None:
     """TRUE / FALSE / UNKNOWN (None) -- conservative; returns None
     whenever the page doesn't show a clear signal either way, rather than
@@ -37,11 +44,19 @@ def detect_existing_resume(page: Page) -> bool | None:
     resume. A bare "Upload" text check is a false-negative trap -- the
     same wizard step also shows an unrelated "Upload your cover letter"
     prompt for the separate, optional cover-letter field; only a
-    resume-specific upload prompt counts as a negative signal."""
-    has_change = page.get_by_text("Change", exact=False).count() > 0
-    has_uploaded_marker = page.get_by_text("Uploaded to profile", exact=False).count() > 0
-    has_marker = page.locator("[data-testid*='resume'], [class*='resume-card'], [class*='current-resume']").count() > 0
-    has_replace = page.get_by_text("Replace", exact=False).count() > 0  # fallback for a different Dice UI variant
+    resume-specific upload prompt counts as a negative signal.
+
+    Real live finding (2026-08-24, brand-new-account closure): a page
+    with NO resume on file can still contain hidden (display:none), fully
+    unrelated elements whose ordinary sentence text happens to contain
+    "change" (a profile-visibility promo card, a cached job-description
+    snippet) -- a plain get_by_text().count() with no visibility check
+    counted those and returned a false True, blocking the real upload
+    outright. Every positive signal below is now required to be visible."""
+    has_change = _visible_count(page.get_by_text("Change", exact=False)) > 0
+    has_uploaded_marker = _visible_count(page.get_by_text("Uploaded to profile", exact=False)) > 0
+    has_marker = _visible_count(page.locator("[data-testid*='resume'], [class*='resume-card'], [class*='current-resume']")) > 0
+    has_replace = _visible_count(page.get_by_text("Replace", exact=False)) > 0  # fallback for a different Dice UI variant
     if has_change or has_uploaded_marker or has_marker or has_replace:
         return True
 
@@ -52,8 +67,11 @@ def detect_existing_resume(page: Page) -> bool | None:
     return None
 
 
-def upload_resume(page: Page, resume_path: Path | None = None) -> ResumeUploadResult:
-    path = resume_path if resume_path is not None else resume_path_from_env()
+def upload_resume(page: Page, resume_path: str | Path | None = None) -> ResumeUploadResult:
+    # argparse (worker.py/worker_daemon.py's --resume-path) always hands
+    # this through as a plain str -- normalize once here rather than at
+    # every CLI call site.
+    path = Path(resume_path) if resume_path is not None else resume_path_from_env()
     if not path.exists():
         return ResumeUploadResult(uploaded=False, existing_resume_detected=None, reason="RESUME_FILE_MISSING")
 
@@ -173,11 +191,30 @@ def _find_resume_file_input(page: Page):
     scopes by DOM position relative to the "Resume"/"Cover letter" text
     landmarks instead: the input must fall between them, not merely
     "before Cover Letter" (a glued-at-the-top input would satisfy that
-    alone without truly belonging to the Resume field)."""
+    alone without truly belonging to the Resume field).
+
+    Real live finding (2026-08-24, brand-new-account closure): the real
+    page's "Cover letter" text substring also matches two ANCESTOR
+    wrapper elements whose aggregated textContent happens to contain it
+    (the card div, the form), not just the actual label -- get_by_text(
+    ...).first then lands on one of those wrappers, and an input that is
+    a DESCENDANT of that wrapper doesn't "precede" it, so the positional
+    check failed for every candidate. Each real input also carries an
+    explicit, unambiguous aria-describedby ("resume-description" /
+    "cover letter-description") -- try that first; it can't be fooled by
+    nested/ancestor text matches. Falls back to the older positional
+    heuristic for any Dice UI variant that lacks it."""
     inp_id = page.locator("input#fsp-fileUpload")
     candidates = list(inp_id.all()) if inp_id.count() > 0 else list(page.locator("input[type='file']").all())
     if not candidates:
         return None
+
+    described_as_resume = [
+        c for c in candidates
+        if (d := (c.get_attribute("aria-describedby") or "").lower()) and "resume" in d and "cover" not in d
+    ]
+    if len(described_as_resume) == 1:
+        return described_as_resume[0]
 
     resume_marker = page.get_by_text("Resume *", exact=False).first
     cover_letter_marker = page.get_by_text("Cover letter", exact=False).first

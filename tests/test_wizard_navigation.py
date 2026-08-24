@@ -99,6 +99,82 @@ def test_fill_radio_raises_when_no_inputs_found_for_question_id(page):
         pass
 
 
+def test_fill_radio_works_when_custom_styled_overlay_intercepts_pointer_events(page):
+    # Real live finding (2026-08-24, job 3f63223a-1dc9-4af9-914c-4ed01e625d44
+    # Step 3 "Are you able and willing to regularly come into the office to
+    # work?"): the real radiogroup wraps each input in a custom-styled
+    # visual layer (a sibling div drawing the circle/checkmark) that sits
+    # on top of the real <input type=radio> and intercepts pointer events.
+    # A plain .check() (real simulated click) retried for the full 30s
+    # timeout and never actually clicked -- Playwright's own actionability
+    # check refuses to click through an intercepting element by design.
+    page.set_content(
+        f"""
+        <html><body>
+        <div role="radiogroup" style="position: relative;">
+          <label style="position: relative; display: block; width: 100px; height: 20px;">
+            <input type="radio" name="{"onsite-question-uuid"}" value="yes"
+                   style="position: absolute; inset: 0; opacity: 0;">
+            <div style="position: absolute; inset: 0;">Yes</div>
+          </label>
+          <label style="position: relative; display: block; width: 100px; height: 20px;">
+            <input type="radio" name="{"onsite-question-uuid"}" value="no"
+                   style="position: absolute; inset: 0; opacity: 0;">
+            <div style="position: absolute; inset: 0;">No</div>
+          </label>
+        </div>
+        </body></html>
+        """
+    )
+    fill_answer(page, _radio_question(), "Yes")
+    checked = page.locator("input[type='radio']:checked")
+    assert checked.count() == 1
+    label = checked.first.evaluate("e => e.closest('label').innerText.trim()")
+    assert label == "Yes"
+
+
+def test_fill_radio_clicks_react_aria_pressable_wrapper_when_present(page):
+    # Real live finding (2026-08-24), a second real-shape failure past the
+    # overlay-interception fix above: the real radiogroup is a React-Aria
+    # <Radio> component (marked data-react-aria-pressable="true") whose own
+    # gesture handling lives on a wrapper element carrying data-rac, not on
+    # the native input directly -- even a force=True click ON THE INPUT
+    # dispatched successfully (per Playwright's log) but never toggled
+    # `checked`, raising "Clicking the checkbox did not change its state".
+    # The nearest data-rac ancestor is the actual real click target
+    # (mirrors _extract_select's identical data-rac group-scoping, never a
+    # page-wide search).
+    page.set_content(
+        f"""
+        <html><body>
+        <div role="radiogroup">
+          <label data-rac="" onclick="this.querySelector('input').checked = true;
+                                       this.querySelector('input').dispatchEvent(new Event('change', {{bubbles: true}}));">
+            <input type="radio" name="{"onsite-question-uuid"}" value="1" data-react-aria-pressable="true"
+                   onclick="this.checked = false;">
+            Yes
+          </label>
+          <label data-rac="" onclick="this.querySelector('input').checked = true;
+                                       this.querySelector('input').dispatchEvent(new Event('change', {{bubbles: true}}));">
+            <input type="radio" name="{"onsite-question-uuid"}" value="2" data-react-aria-pressable="true"
+                   onclick="this.checked = false;">
+            No
+          </label>
+        </div>
+        </body></html>
+        """
+    )
+    # Adversarial: the input's own click handler actively un-checks itself
+    # (simulating the real page, where a direct click on the input never
+    # results in a checked state) -- this test only passes if fill_answer
+    # actually clicks the data-rac wrapper, never the raw input.
+    fill_answer(page, _radio_question(), "Yes")
+    checked = page.locator("input[type='radio']:checked")
+    assert checked.count() == 1
+    label = checked.first.evaluate("e => e.closest('label').innerText.trim()")
+    assert label == "Yes"
+
+
 def test_fill_radio_raises_when_option_label_not_found(page):
     page.set_content(
         """
@@ -128,6 +204,99 @@ def test_fill_textarea_raises_when_not_uniquely_found(page):
     page.set_content("<html><body></body></html>")
     try:
         fill_answer(page, _textarea_question(), "50000")
+        assert False, "expected AnswerFillFailedError"
+    except AnswerFillFailedError:
+        pass
+
+
+# ── fill_answer: SELECT (2026-08-24 live finding) ──────────────────────────
+
+
+def _select_question(question_id="workAuthorization"):
+    return QuestionField(
+        question_id=question_id,
+        prompt="Work Authorization *",
+        field_type=FieldType.SELECT,
+        required_state=RequiredState.UNKNOWN,
+        options=("US Citizen", "Have H1 Visa", "Green Card Holder"),
+        current_value=None,
+        helper=None,
+        status=QuestionStatus.NEEDS_INPUT,
+    )
+
+
+def _select_fixture(question_id="workAuthorization"):
+    return f"""
+    <html><body>
+    <select name="{question_id}">
+      <option value="">&nbsp;</option>
+      <option value="US_CITIZEN">US Citizen</option>
+      <option value="HAVE_H1_VISA">Have H1 Visa</option>
+      <option value="GREEN_CARD_HOLDER">Green Card Holder</option>
+    </select>
+    </body></html>
+    """
+
+
+def test_fill_select_chooses_correct_option(page):
+    page.set_content(_select_fixture())
+    fill_answer(page, _select_question(), "Have H1 Visa")
+    assert page.locator("select[name='workAuthorization']").input_value() == "HAVE_H1_VISA"
+
+
+def test_fill_select_rejects_answer_not_in_options(page):
+    page.set_content(_select_fixture())
+    try:
+        fill_answer(page, _select_question(), "Canadian Citizen")
+        assert False, "expected AnswerFillFailedError"
+    except AnswerFillFailedError:
+        pass
+    assert page.locator("select[name='workAuthorization']").input_value() == ""
+
+
+def test_fill_select_raises_when_not_uniquely_found(page):
+    page.set_content("<html><body></body></html>")
+    try:
+        fill_answer(page, _select_question(), "Have H1 Visa")
+        assert False, "expected AnswerFillFailedError"
+    except AnswerFillFailedError:
+        pass
+
+
+# ── fill_answer: TEXT_INPUT (2026-08-24 live finding) ───────────────────────
+
+
+def _text_input_question(question_id="candidateLocation"):
+    return QuestionField(
+        question_id=question_id,
+        prompt="What is your current city of residence? *",
+        field_type=FieldType.TEXT_INPUT,
+        required_state=RequiredState.UNKNOWN,
+        options=None,
+        current_value=None,
+        helper=None,
+        status=QuestionStatus.NEEDS_INPUT,
+    )
+
+
+def _text_input_fixture(question_id="candidateLocation"):
+    return f"""
+    <html><body>
+    <input type="text" name="{question_id}" placeholder="Enter your city or postal code">
+    </body></html>
+    """
+
+
+def test_fill_text_input_sets_value(page):
+    page.set_content(_text_input_fixture())
+    fill_answer(page, _text_input_question(), "West Haven, CT")
+    assert page.locator("input[name='candidateLocation']").input_value() == "West Haven, CT"
+
+
+def test_fill_text_input_raises_when_not_uniquely_found(page):
+    page.set_content("<html><body></body></html>")
+    try:
+        fill_answer(page, _text_input_question(), "West Haven, CT")
         assert False, "expected AnswerFillFailedError"
     except AnswerFillFailedError:
         pass

@@ -60,6 +60,7 @@ from db.intervention_repository import (
     ApplicationReadiness,
     compute_application_readiness,
     create_or_get_question_intervention,
+    find_reusable_answer,
     get_resolved_answers,
 )
 from db.submission_repository import record_submission_result
@@ -129,6 +130,7 @@ def _load_candidate(candidate_id: str) -> CandidateProfile | None:
 def _walk_questions_to_review(
     page: Page,
     application_id: str,
+    candidate_id: str,
     candidate: CandidateProfile | None,
     resolved_overrides: dict[str, Any],
 ) -> ApplicationRunResult | None:
@@ -137,7 +139,10 @@ def _walk_questions_to_review(
     an ApplicationRunResult if something stopped it. `resolved_overrides`
     are question_id -> answer pairs already resolved via a Supabase
     intervention (the resume path) -- these are filled directly, never
-    re-asked."""
+    re-asked. Failing that, find_reusable_answer() (2026-08-24) checks
+    whether this SAME candidate already answered this exact standardized
+    Dice question_id on a different application -- see its own docstring
+    for why this can never accidentally reuse a job-specific question."""
     while True:
         if is_review_screen(page):
             return None
@@ -189,6 +194,25 @@ def _walk_questions_to_review(
                     event_type="answer_auto_filled",
                     step="ANSWER_QUESTIONS",
                     message=f"auto-filled {question.question_id} from a trusted candidate field",
+                    metadata={"question_id": question.question_id},
+                )
+                continue
+
+            reused_answer = None
+            if question.status == QuestionStatus.NEEDS_INPUT:
+                reused_answer = find_reusable_answer(candidate_id, question.question_id)
+
+            if reused_answer is not None:
+                try:
+                    fill_answer(page, question, reused_answer)
+                except (AnswerFillFailedError, UnsupportedFieldTypeError) as exc:
+                    _fail(application_id, "FAILED_RETRYABLE", "ANSWER_FILL_FAILED", str(exc))
+                    return ApplicationRunResult(application_id, None, StopReason.NAVIGATION_FAILED, str(exc))
+                add_event(
+                    application_id,
+                    event_type="answer_reused_from_prior_application",
+                    step="ANSWER_QUESTIONS",
+                    message=f"reused a prior answer this candidate already gave for {question.question_id}",
                     metadata={"question_id": question.question_id},
                 )
                 continue
@@ -370,7 +394,7 @@ def process_one_application(
 
     candidate = _load_candidate(candidate_id)
 
-    blocker = _walk_questions_to_review(page, application_id, candidate, {})
+    blocker = _walk_questions_to_review(page, application_id, candidate_id, candidate, {})
     if blocker is not None:
         return ApplicationRunResult(application_id, dice_job_id, blocker.stop_reason, blocker.detail)
 
@@ -428,7 +452,7 @@ def resume_needs_input_application(
     candidate = _load_candidate(application["candidate_id"])
     resolved_overrides = get_resolved_answers(application_id)
 
-    blocker = _walk_questions_to_review(page, application_id, candidate, resolved_overrides)
+    blocker = _walk_questions_to_review(page, application_id, application["candidate_id"], candidate, resolved_overrides)
     if blocker is not None:
         return ApplicationRunResult(application_id, dice_job_id, blocker.stop_reason, blocker.detail)
 

@@ -87,15 +87,22 @@ class QuestionExtractionStatus(str, Enum):
 
 
 class FieldType(str, Enum):
-    """Deliberately minimal -- SELECT/DATE/CHECKBOX/MULTI_SELECT/etc. are
-    not added until a real live question of that shape has actually been
+    """Deliberately minimal -- DATE/CHECKBOX/MULTI_SELECT/etc. are not
+    added until a real live question of that shape has actually been
     observed. RADIO and TEXTAREA are live-verified (Java Developer @
-    Yashnee Tech Solutions, 2026-08-21, job 3f63223a-1dc9-4af9-914c-4ed01e625d44).
-    Anything else found is UNSUPPORTED by construction, never guessed
-    into one of these two."""
+    Yashnee Tech Solutions, 2026-08-21, job 3f63223a-1dc9-4af9-914c-4ed01e625d44,
+    Step 2 "Application Questions"). SELECT and TEXT_INPUT are also
+    live-verified against the SAME job's Step 2 "Additional Information"
+    screen (2026-08-24) -- a visually-hidden-but-accessible native
+    <select name="workAuthorization"> behind a custom listbox button, and
+    a plain <input type="text" name="candidateLocation">. Anything else
+    found is UNSUPPORTED by construction, never guessed into one of
+    these."""
 
     RADIO = "RADIO"
     TEXTAREA = "TEXTAREA"
+    SELECT = "SELECT"
+    TEXT_INPUT = "TEXT_INPUT"
     UNSUPPORTED = "UNSUPPORTED"
 
 

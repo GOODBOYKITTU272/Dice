@@ -227,6 +227,26 @@ def test_process_one_application_needs_input_creates_intervention(fake_intervent
     assert interventions[0]["options"]["question_id"] == "onsite-q-uuid"
 
 
+# 6b. A prior answer this candidate already gave for this exact
+# question_id (on a different application) is reused directly -- no
+# intervention created, no NEEDS_INPUT stop.
+def test_process_one_application_reuses_prior_answer_no_intervention(fake_intervention_repo, page, monkeypatch):
+    app = _make_queued_application()
+    _patch_happy_path(monkeypatch, questions_extraction=_one_needs_input_question())
+    fill_calls = []
+    monkeypatch.setattr(worker, "fill_answer", lambda page, question, answer: fill_calls.append((question.question_id, answer)))
+    monkeypatch.setattr(worker, "find_reusable_answer", lambda candidate_id, question_id: "Yes" if question_id == "onsite-q-uuid" else None)
+
+    result = worker.process_one_application(page, CANDIDATE, "test-worker")
+
+    assert fill_calls == [("onsite-q-uuid", "Yes")]
+    interventions = [
+        r for r in app_repo.get_supabase_client().tables["interventions"] if r["application_id"] == app["id"]
+    ]
+    assert interventions == []
+    assert result.stop_reason != worker.StopReason.NEEDS_INPUT
+
+
 # 7. Sequential: worker never claims a second application while one is mid-flight
 def test_process_one_application_claims_at_most_one(fake_intervention_repo, page, monkeypatch):
     _make_queued_application(dice_job_id="DICE-6-A")
