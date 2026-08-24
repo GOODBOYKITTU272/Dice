@@ -344,3 +344,45 @@ def test_handle_confirm_raises_when_nothing_pending(live_client):
 
     with pytest.raises(UnresolvableEventError):
         handle_confirm(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.CONFIRM, application_id=application["id"], question_id="q-1"))
+
+
+# 13. stale callback rejected -- a Confirm button tapped after that
+# question was already resolved (e.g. via a different channel, or a
+# second identical button press delivered after the first one already
+# went through) must not silently re-resolve or corrupt state.
+def test_handle_confirm_raises_for_an_already_resolved_question(live_client):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _needs_input_application(candidate_id, job["id"])
+    update_application_status(application["id"], "NEEDS_INPUT")
+    create_or_get_question_intervention(application_id=application["id"], question_id="q-1", question_prompt="Question 1", field_type="TEXT_INPUT", reason="no trusted candidate mapping")
+    provider = _FakeProvider()
+    from attention.service import handle_answer
+
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="an answer"))
+    handle_confirm(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.CONFIRM, application_id=application["id"], question_id="q-1"))
+
+    # stale: a second, distinct Confirm callback for the same
+    # already-resolved question -- get_open_intervention no longer finds
+    # it OPEN, so this must raise rather than re-resolve it.
+    with pytest.raises(UnresolvableEventError):
+        handle_confirm(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.CONFIRM, application_id=application["id"], question_id="q-1"))
+
+
+# 22. ambiguous correlation is never guessed -- two interventions OPEN
+# at once with neither yet asked over the channel (no MISSING_QUESTION
+# sent) means an unstructured inbound reply (no explicit question_id,
+# e.g. a plain-text iMessage answer) has no safe way to know which
+# question it's answering. Must raise, never guess "the first one".
+def test_handle_answer_raises_when_multiple_interventions_are_open_and_none_yet_asked(live_client):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _needs_input_application(candidate_id, job["id"])
+    update_application_status(application["id"], "NEEDS_INPUT")
+    create_or_get_question_intervention(application_id=application["id"], question_id="q-1", question_prompt="Question 1", field_type="TEXT_INPUT", reason="no trusted candidate mapping")
+    create_or_get_question_intervention(application_id=application["id"], question_id="q-2", question_prompt="Question 2", field_type="TEXT_INPUT", reason="no trusted candidate mapping")
+    provider = _FakeProvider()
+    from attention.service import handle_answer
+
+    with pytest.raises(UnresolvableEventError):
+        handle_answer(provider, NormalizedEvent(channel="IMESSAGE", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], raw_text="an answer"))

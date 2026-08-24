@@ -138,44 +138,33 @@ def _check_browser_and_auth(cdp_url: str, provider: str) -> str:
         playwright.stop()
 
 
-# ── Phase 7.4: Apply/Skip messaging notifications + resume-polling ───────
+# ── Phase 7.4/7.5: Apply/Skip messaging notifications + resume-polling ───
 # Both are additive to the idle branch only -- the existing run-claim/
 # process/recover path above is completely untouched. A messaging failure
-# (provider not configured, network error) must never disrupt real Dice
+# (no channel bound, network error) must never disrupt real Dice
 # application processing, so every notification call is wrapped and
 # logged, never raised.
 
 
-def _configured_attention_providers() -> list:
-    """Whichever of Telegram/iMessage have their required env vars set --
-    both, one, or neither. Imported lazily so this module never requires
-    `requests`-based Telegram calls or macOS-only iMessage/sqlite3 access
-    to simply be imported."""
-    providers: list = []
-    if os.environ.get("TELEGRAM_BOT_TOKEN") and os.environ.get("TELEGRAM_CHAT_ID"):
-        from attention.providers.telegram import TelegramProvider
-
-        providers.append(TelegramProvider())
-    if os.environ.get("IMESSAGE_CONTACT"):
-        from attention.providers.imessage import IMessageProvider
-
-        providers.append(IMessageProvider())
-    return providers
-
-
-def _notify_result(providers: list, result) -> None:
-    if not providers or result.application_id is None:
+def _notify_result(candidate_id: str | None, result) -> None:
+    """Routes through attention.routing (Telegram primary / iMessage
+    secondary, using the candidate's real bound identity from
+    candidate_attention_channels -- see attention/routing.py) rather than
+    a raw env-var provider list. A messaging failure must never disrupt
+    real Dice application processing, so this is always wrapped, never
+    raised."""
+    if candidate_id is None or result.application_id is None:
         return
+    import attention.routing as attention_routing
     import attention.service as attention_service
 
-    for provider in providers:
-        try:
-            if result.stop_reason == StopReason.NEEDS_INPUT:
-                attention_service.notify_next_missing_question(provider, result.application_id)
-            elif result.stop_reason == StopReason.VERIFIED_SUBMITTED:
-                attention_service.notify_submission_success(provider, result.application_id)
-        except Exception as exc:  # noqa: BLE001 - a messaging failure must never crash the daemon
-            print(f"Attention notification failed ({provider.channel}): {exc}")
+    try:
+        if result.stop_reason == StopReason.NEEDS_INPUT:
+            attention_routing.send_via_primary_with_fallback(candidate_id, attention_service.notify_next_missing_question, result.application_id)
+        elif result.stop_reason == StopReason.VERIFIED_SUBMITTED:
+            attention_routing.send_via_primary_with_fallback(candidate_id, attention_service.notify_submission_success, result.application_id)
+    except Exception as exc:  # noqa: BLE001 - a messaging failure must never crash the daemon
+        print(f"Attention notification failed: {exc}")
 
 
 def _find_resumable_application(candidate_id: str) -> dict | None:
@@ -295,7 +284,7 @@ def run_daemon(
                         submission_policy=resume_policy or SubmissionPolicy.REQUIRE_CONFIRMATION,
                         resume_path=resume_path,
                     )
-                    _notify_result(_configured_attention_providers(), result)
+                    _notify_result(candidate_id, result)
                 except Exception:
                     run_registry.write_heartbeat(worker_id, status="RECOVERING")
                     if resumable.get("run_id"):
@@ -335,9 +324,8 @@ def run_daemon(
         run_registry.write_heartbeat(worker_id, status=last_status)
         try:
             summary = run_worker_for_run(page, run["id"], worker_id, submission_policy=policy, resume_path=resume_path)
-            providers = _configured_attention_providers()
             for result in getattr(summary, "processed", None) or []:
-                _notify_result(providers, result)
+                _notify_result(run["candidate_id"], result)
         except Exception:
             run_registry.write_heartbeat(worker_id, status="RECOVERING")
             reconciled = run_registry.reconcile_run_after_disconnect(run["id"])

@@ -125,14 +125,17 @@ def handle_skip(application_id: str) -> None:
     update_application_status(application_id, "SKIPPED")
 
 
-def handle_answer(provider: AttentionProvider, event: NormalizedEvent) -> None:
+def handle_answer(provider: AttentionProvider, event: NormalizedEvent, candidate_id: str | None = None) -> None:
     """Records the raw answer as PENDING (an inbound attention_events row
     only -- interventions.answer is untouched) and asks the user to
     Confirm/Edit. Never itself resolves the intervention -- only
-    handle_confirm does that."""
+    handle_confirm does that. `candidate_id`, when given (attention.
+    consumer already resolved the real sender via candidate_attention_
+    channels), takes priority over the single-candidate env-var fallback
+    -- see _resolve_pending_application_id."""
     if already_processed_inbound(event.channel, event.external_message_id):
         return
-    application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT")
+    application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT", candidate_id)
     question_id = event.question_id or latest_active_question_id(application_id)
     if question_id is None:
         raise UnresolvableEventError("no pending question to attribute this answer to")
@@ -158,7 +161,7 @@ def handle_answer(provider: AttentionProvider, event: NormalizedEvent) -> None:
     )
 
 
-def handle_confirm(provider: AttentionProvider, event: NormalizedEvent) -> None:
+def handle_confirm(provider: AttentionProvider, event: NormalizedEvent, candidate_id: str | None = None) -> None:
     """"This answer is correct for this application" -- not "remember
     this forever". Reuse eligibility is entirely find_reusable_answer()'s
     existing exact-question_id policy (dice_browser.worker already
@@ -169,7 +172,7 @@ def handle_confirm(provider: AttentionProvider, event: NormalizedEvent) -> None:
     back up (dice_browser/worker_daemon.py's RESUMABLE check)."""
     if already_processed_inbound(event.channel, event.external_message_id):
         return
-    application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT")
+    application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT", candidate_id)
     question_id = event.question_id or latest_active_question_id(application_id)
     if question_id is None:
         raise UnresolvableEventError("no pending question to confirm")
@@ -199,13 +202,13 @@ def handle_confirm(provider: AttentionProvider, event: NormalizedEvent) -> None:
     # else: fully resolved -- worker daemon resumes it on its own poll.
 
 
-def handle_edit(provider: AttentionProvider, event: NormalizedEvent) -> None:
+def handle_edit(provider: AttentionProvider, event: NormalizedEvent, candidate_id: str | None = None) -> None:
     """Discards the pending (unconfirmed) answer -- it was never written
     to interventions.answer, so there's nothing to undo there -- and asks
     the same question again."""
     if already_processed_inbound(event.channel, event.external_message_id):
         return
-    application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT")
+    application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT", candidate_id)
     question_id = event.question_id or latest_active_question_id(application_id)
     if question_id is None:
         raise UnresolvableEventError("no pending question to edit")
@@ -233,19 +236,52 @@ def handle_edit(provider: AttentionProvider, event: NormalizedEvent) -> None:
         )
 
 
-def handle_event(provider: AttentionProvider, event: NormalizedEvent) -> None:
+def handle_event(provider: AttentionProvider, event: NormalizedEvent, candidate_id: str | None = None) -> None:
     """Single dispatch entry point both providers' inbound handlers call
-    into -- keeps the action->handler mapping in exactly one place."""
+    into -- keeps the action->handler mapping in exactly one place.
+    `candidate_id` should be the sender identity attention.consumer
+    already resolved via candidate_attention_channels -- omitting it
+    falls back to the single-candidate env var (DICEPILOT_CANDIDATE_ID),
+    which is only ever correct when that's genuinely the one candidate
+    involved (existing offline tests written before real multi-identity
+    resolution existed).
+
+    APPLY/SKIP record their own inbound attention_events row here (the
+    one place with both the resolved application_id and the full event)
+    rather than inside handle_apply/handle_skip themselves -- those two
+    keep their existing application_id-only signature (and every
+    existing test that calls them directly) unchanged. Real live finding:
+    without this, already_processed_inbound() had nothing to ever match
+    against for these two actions, so neither dedup nor Telegram's
+    getUpdates offset (attention.consumer._last_seen_external_id, also
+    derived from recorded inbound events) ever advanced past a
+    processed Apply/Skip."""
     if event.action == AttentionAction.APPLY:
-        handle_apply(event.application_id or _resolve_pending_application_id("AWAITING_USER_DECISION"))
+        application_id = event.application_id or _resolve_offer_application_id(candidate_id)
+        _record_offer_decision_inbound(event, application_id, AttentionAction.APPLY)
+        handle_apply(application_id)
     elif event.action == AttentionAction.SKIP:
-        handle_skip(event.application_id or _resolve_pending_application_id("AWAITING_USER_DECISION"))
+        application_id = event.application_id or _resolve_offer_application_id(candidate_id)
+        _record_offer_decision_inbound(event, application_id, AttentionAction.SKIP)
+        handle_skip(application_id)
     elif event.action == AttentionAction.ANSWER:
-        handle_answer(provider, event)
+        handle_answer(provider, event, candidate_id)
     elif event.action == AttentionAction.CONFIRM:
-        handle_confirm(provider, event)
+        handle_confirm(provider, event, candidate_id)
     elif event.action == AttentionAction.EDIT:
-        handle_edit(provider, event)
+        handle_edit(provider, event, candidate_id)
+
+
+def _record_offer_decision_inbound(event: NormalizedEvent, application_id: str, action: AttentionAction) -> None:
+    application = get_application(application_id)
+    record_inbound(
+        application_id,
+        application["candidate_id"],
+        event.channel,
+        MessageType.JOB_OFFER.value,
+        action.value,
+        event.external_message_id,
+    )
 
 
 def _default_candidate_id() -> str:
@@ -257,17 +293,20 @@ def _default_candidate_id() -> str:
     return candidate_id
 
 
-def _resolve_pending_application_id(status: str) -> str:
-    """V1 is explicitly single-candidate; a channel with no structured
-    correlation (iMessage's plain-text replies) always means "the one
-    candidate this deployment is configured for". Resolves to that
-    candidate's most recently created application currently in `status`
-    -- there is only ever meant to be one (job offers and missing
-    questions are both strictly sequential), but "most recent" is the
-    well-defined tiebreaker if that invariant is ever violated."""
+def _resolve_pending_application_id(status: str, candidate_id: str | None = None) -> str:
+    """A channel with no structured correlation (iMessage's plain-text
+    replies) always means "whichever candidate attention.consumer
+    resolved this sender to". Resolves to that candidate's most recently
+    created application currently in `status` -- there is only ever
+    meant to be one (job offers and missing questions are both strictly
+    sequential), but "most recent" is the well-defined tiebreaker if
+    that invariant is ever violated. Falls back to the single-candidate
+    env var only when no explicit candidate_id is given (existing
+    offline tests / a channel not yet wired through attention.consumer's
+    real sender resolution)."""
     from db.supabase_client import get_supabase_client
 
-    candidate_id = _default_candidate_id()
+    candidate_id = candidate_id or _default_candidate_id()
     client = get_supabase_client()
     rows = (
         client.table("applications")
@@ -280,5 +319,37 @@ def _resolve_pending_application_id(status: str) -> str:
     )
     if not rows:
         raise UnresolvableEventError(f"no {status} application for candidate {candidate_id!r}")
+    rows.sort(key=lambda r: r.get("created_at") or "")
+    return rows[-1]["id"]
+
+
+_OFFER_LIFECYCLE_STATUSES = ("AWAITING_USER_DECISION", "QUEUED", "SKIPPED")
+
+
+def _resolve_offer_application_id(candidate_id: str | None = None) -> str:
+    """APPLY/SKIP's own resolver -- deliberately broader than
+    _resolve_pending_application_id's single-status lookup. Real live
+    finding: handle_apply/handle_skip's own idempotency check (a second
+    Apply/Skip finds the application already past AWAITING_USER_DECISION
+    and no-ops) can only ever run once an application_id is actually
+    resolved -- a duplicate delivery arriving AFTER the first one already
+    transitioned the status away from AWAITING_USER_DECISION would
+    otherwise fail resolution entirely before that idempotency check
+    gets the chance to fire. Resolving across the whole small offer
+    lifecycle (still-pending, already applied, already skipped) instead
+    lets a duplicate correctly resolve to the SAME application either way,
+    exactly matching the invariant "there is only ever one active job
+    offer conversation with this candidate at a time"."""
+    from db.supabase_client import get_supabase_client
+
+    candidate_id = candidate_id or _default_candidate_id()
+    client = get_supabase_client()
+    rows: list[dict] = []
+    for status in _OFFER_LIFECYCLE_STATUSES:
+        rows.extend(
+            client.table("applications").select("id, created_at").eq("candidate_id", candidate_id).eq("status", status).execute().data or []
+        )
+    if not rows:
+        raise UnresolvableEventError(f"no pending or recently-decided job offer for candidate {candidate_id!r}")
     rows.sort(key=lambda r: r.get("created_at") or "")
     return rows[-1]["id"]

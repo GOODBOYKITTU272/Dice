@@ -52,8 +52,32 @@ def _chat_id() -> str:
 class TelegramProvider:
     channel = "TELEGRAM"
 
+    def __init__(self, chat_id: str | None = None):
+        """chat_id, when given, overrides TELEGRAM_CHAT_ID for every send
+        from this instance -- what lets attention.service look up a
+        candidate's real bound chat id (candidate_attention_channels)
+        and send there, rather than the env var being the permanent
+        identity source. Omitting it keeps the original single-candidate
+        env-var behavior (existing tests, and single-candidate V1 code
+        paths that haven't been threaded through channel resolution)."""
+        self._chat_id_override = chat_id
+
+    def fetch_updates(self, offset: int | None = None, timeout: int = 0) -> list[dict]:
+        """getUpdates long-polling -- the acceptable-for-V1 mechanism
+        (no publicly reachable backend exists yet for a webhook). Passing
+        offset=<last update_id>+1 is what tells Telegram to stop
+        returning already-seen updates; the caller (attention.consumer)
+        derives that from attention_events, never from in-memory state,
+        so a restart never re-processes or loses updates."""
+        params: dict = {"timeout": timeout}
+        if offset is not None:
+            params["offset"] = offset
+        resp = requests.get(f"{_API_BASE}/bot{_bot_token()}/getUpdates", params=params, timeout=_DEFAULT_TIMEOUT_SECONDS + timeout)
+        resp.raise_for_status()
+        return resp.json().get("result", [])
+
     def _send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None) -> str:
-        payload: dict = {"chat_id": _chat_id(), "text": text}
+        payload: dict = {"chat_id": self._chat_id_override or _chat_id(), "text": text}
         if buttons:
             payload["reply_markup"] = {
                 "inline_keyboard": [[{"text": label, "callback_data": data} for label, data in row] for row in buttons]
@@ -86,6 +110,18 @@ class TelegramProvider:
     def send_submission_failure(self, application: dict, job: dict, reason: str) -> str:
         text = f"Couldn't complete this application.\n\n{job['title']}\n{job.get('company_name') or ''}\n\n{reason}".rstrip()
         return self._send(text)
+
+    def extract_chat_id(self, raw_event: dict) -> str | None:
+        """Only used for sender resolution (attention.channels), never
+        for correlating an application/question -- that stays entirely
+        NormalizedEvent's job."""
+        callback = raw_event.get("callback_query")
+        if callback is not None:
+            chat = (callback.get("message") or {}).get("chat") or {}
+            return str(chat["id"]) if "id" in chat else None
+        message = raw_event.get("message") or {}
+        chat = message.get("chat") or {}
+        return str(chat["id"]) if "id" in chat else None
 
     def parse_inbound(self, raw_event: dict) -> NormalizedEvent:
         external_message_id = str(raw_event["update_id"])

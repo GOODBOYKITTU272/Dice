@@ -83,8 +83,16 @@ def read_new_messages(contact: str, since_rowid: int = 0) -> list[dict[str, Any]
 class IMessageProvider:
     channel = "IMESSAGE"
 
+    def __init__(self, contact: str | None = None):
+        """contact, when given, overrides IMESSAGE_CONTACT for every send
+        from this instance -- same reasoning as TelegramProvider's
+        chat_id override: lets attention.service send to a candidate's
+        real bound contact (candidate_attention_channels) rather than
+        the env var being the permanent identity source."""
+        self._contact_override = contact
+
     def _send(self, text: str) -> str:
-        contact = _contact()
+        contact = self._contact_override or _contact()
         _send_via_messages_app(text, contact)
         # chat.db assigns the ROWID asynchronously (Messages.app owns the
         # write); there is no synchronous "message id" osascript hands

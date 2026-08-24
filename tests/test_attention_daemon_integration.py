@@ -1,9 +1,14 @@
-"""Phase 7.4: worker_daemon.py's Apply/Skip messaging additions --
-_find_resumable_application, _configured_attention_providers,
-_notify_result. Against the real, linked Supabase project, same
-TEST-prefixed disposable row convention as the other Phase 7.4 tests.
-Never opens a browser -- these are the pure orchestration-glue functions
-around the (unmodified) real worker/attention layers.
+"""Phase 7.4/7.5: worker_daemon.py's Apply/Skip messaging additions --
+_find_resumable_application, _notify_result. Against the real, linked
+Supabase project, same TEST-prefixed disposable row convention as the
+other Phase 7.4 tests. Never opens a browser -- these are the pure
+orchestration-glue functions around the (unmodified) real worker/
+attention layers.
+
+Phase 7.5: _notify_result now routes through attention.routing (the
+candidate's real bound candidate_attention_channels identity) instead of
+a raw env-var provider list -- its tests bind a real channel row and
+monkeypatch the provider class's send method, never a bare provider list.
 """
 from __future__ import annotations
 
@@ -11,14 +16,27 @@ import uuid
 
 import pytest
 
+import attention.channels as attention_channels
 import dice_browser.worker_daemon as worker_daemon
 import run_registry
+from attention.providers.telegram import TelegramProvider
 from db.application_repository import enqueue_application, update_application_status, upsert_dice_job
 from db.intervention_repository import create_or_get_question_intervention, resolve_question_intervention
 from db.supabase_client import get_supabase_client
 from dice_browser.worker import ApplicationRunResult, StopReason
 
 _created_job_ids: list[str] = []
+_created_channel_rows: list[str] = []
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_created_channel_rows():
+    try:
+        yield
+    finally:
+        client = get_supabase_client()
+        while _created_channel_rows:
+            client.table("candidate_attention_channels").delete().eq("id", _created_channel_rows.pop()).execute()
 
 
 def _make_test_job():
@@ -124,91 +142,65 @@ def test_real_historical_stopped_runs_remain_stopped_and_excluded():
         assert run["status"] == "STOPPED"
 
 
-# ── _configured_attention_providers ───────────────────────────────────
+# ── _notify_result (Phase 7.5: routes via attention.routing, using the
+# candidate's real bound candidate_attention_channels identity) ─────────
 
 
-def test_configured_attention_providers_empty_when_unconfigured(monkeypatch):
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
-    monkeypatch.delenv("IMESSAGE_CONTACT", raising=False)
-    assert worker_daemon._configured_attention_providers() == []
-
-
-def test_configured_attention_providers_includes_telegram_when_configured(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
-    monkeypatch.delenv("IMESSAGE_CONTACT", raising=False)
-    providers = worker_daemon._configured_attention_providers()
-    assert [p.channel for p in providers] == ["TELEGRAM"]
-
-
-def test_configured_attention_providers_includes_both_when_both_configured(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
-    monkeypatch.setenv("IMESSAGE_CONTACT", "+15551234567")
-    providers = worker_daemon._configured_attention_providers()
-    assert sorted(p.channel for p in providers) == ["IMESSAGE", "TELEGRAM"]
-
-
-# ── _notify_result ─────────────────────────────────────────────────────
-
-
-class _SpyProvider:
-    channel = "TELEGRAM"
-
-    def __init__(self):
-        self.calls = []
-
-    def send_missing_question(self, application_id, question):
-        self.calls.append(("missing_question", application_id))
-        return "1"
-
-    def send_submission_success(self, application, job):
-        self.calls.append(("success", application["id"]))
-        return "1"
+def _bind_test_telegram_channel(candidate_id: str) -> None:
+    row = attention_channels.bind_channel(candidate_id, "TELEGRAM", f"TEST-{uuid.uuid4()}")
+    _created_channel_rows.append(row["id"])
 
 
 def test_notify_result_dispatches_needs_input(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     candidate_id = str(uuid.uuid4())
     job = _make_test_job()
     application = _needs_input_application_with_run(candidate_id, job["id"])
     create_or_get_question_intervention(application_id=application["id"], question_id="q-1", question_prompt="Question 1", field_type="TEXT_INPUT", reason="no trusted candidate mapping")
-    provider = _SpyProvider()
+    _bind_test_telegram_channel(candidate_id)
+    calls = []
+    monkeypatch.setattr(TelegramProvider, "send_missing_question", lambda self, application_id, question: calls.append(("missing_question", application_id)) or "1")
+
     result = ApplicationRunResult(application["id"], job["id"], StopReason.NEEDS_INPUT, "one or more questions need human input")
+    worker_daemon._notify_result(candidate_id, result)
 
-    worker_daemon._notify_result([provider], result)
-
-    assert provider.calls == [("missing_question", application["id"])]
+    assert calls == [("missing_question", application["id"])]
 
 
 def test_notify_result_dispatches_verified_submitted(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     candidate_id = str(uuid.uuid4())
     job = _make_test_job()
     application = enqueue_application(candidate_id, job["id"])
-    provider = _SpyProvider()
+    _bind_test_telegram_channel(candidate_id)
+    calls = []
+    monkeypatch.setattr(TelegramProvider, "send_submission_success", lambda self, application, job: calls.append(("success", application["id"])) or "1")
+
     result = ApplicationRunResult(application["id"], job["id"], StopReason.VERIFIED_SUBMITTED, "explicit confirmation text found")
+    worker_daemon._notify_result(candidate_id, result)
 
-    worker_daemon._notify_result([provider], result)
-
-    assert provider.calls == [("success", application["id"])]
+    assert calls == [("success", application["id"])]
 
 
-def test_notify_result_noops_for_unrelated_stop_reasons():
-    provider = _SpyProvider()
+def test_notify_result_noops_for_unrelated_stop_reasons(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    candidate_id = str(uuid.uuid4())
+    _bind_test_telegram_channel(candidate_id)
+    calls = []
+    monkeypatch.setattr(TelegramProvider, "send_missing_question", lambda self, application_id, question: calls.append("called") or "1")
+    monkeypatch.setattr(TelegramProvider, "send_submission_success", lambda self, application, job: calls.append("called") or "1")
     result = ApplicationRunResult("some-app-id", "some-job-id", StopReason.NOTHING_QUEUED, "no QUEUED application available")
 
-    worker_daemon._notify_result([provider], result)
+    worker_daemon._notify_result(candidate_id, result)
 
-    assert provider.calls == []
+    assert calls == []
 
 
-def test_notify_result_noops_when_no_providers_configured():
+def test_notify_result_noops_when_no_candidate_id():
     result = ApplicationRunResult("some-app-id", "some-job-id", StopReason.VERIFIED_SUBMITTED, "ok")
-    worker_daemon._notify_result([], result)  # must not raise even with no providers
+    worker_daemon._notify_result(None, result)  # must not raise with no candidate
 
 
 def test_notify_result_noops_when_application_id_is_none():
-    provider = _SpyProvider()
     result = ApplicationRunResult(None, None, StopReason.NOTHING_QUEUED, "no QUEUED application available")
-    worker_daemon._notify_result([provider], result)
-    assert provider.calls == []
+    worker_daemon._notify_result(str(uuid.uuid4()), result)  # must not raise
