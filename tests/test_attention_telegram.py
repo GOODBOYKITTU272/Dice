@@ -85,9 +85,25 @@ def test_send_job_offer_includes_apply_and_skip_buttons(monkeypatch):
 
     assert len(calls) == 1
     payload = calls[0][1]
-    assert "Java Developer" in payload["text"]
+    assert "<b>Java Developer</b>" in payload["text"]
+    assert payload["parse_mode"] == "HTML"
     buttons = payload["reply_markup"]["inline_keyboard"][0]
     assert [b["callback_data"] for b in buttons] == ["APPLY", "SKIP"]
+
+
+def test_send_job_offer_escapes_html_special_characters(monkeypatch):
+    calls = []
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "12345")
+    monkeypatch.setattr(requests, "post", _capture_post(calls))
+
+    provider = TelegramProvider()
+    provider.send_job_offer({"id": "app-1"}, {"title": "C++ Dev <Senior>", "company_name": "Smith & Co"})
+
+    text = calls[0][1]["text"]
+    assert "<Senior>" not in text  # would corrupt HTML parsing / inject markup if unescaped
+    assert "&lt;Senior&gt;" in text
+    assert "Smith &amp; Co" in text
 
 
 # job-offer copy no longer claims a check happened before any wizard
@@ -114,7 +130,8 @@ def test_send_job_offer_includes_metadata_line_when_job_confirms_it(monkeypatch)
     provider = TelegramProvider()
     provider.send_job_offer({"id": "app-1"}, {"title": "Java Developer", "company_name": "ABC Corp", "c2c_status": "CONFIRMED", "is_easy_apply": True})
 
-    assert "C2C • Easy Apply" in calls[0][1]["text"]
+    assert "🔵 C2C" in calls[0][1]["text"]
+    assert "⚡ Easy Apply" in calls[0][1]["text"]
 
 
 def test_send_job_offer_omits_metadata_line_when_job_has_neither(monkeypatch):

@@ -19,6 +19,7 @@ does not require the token to be configured.
 """
 from __future__ import annotations
 
+import html
 import os
 
 import requests
@@ -126,8 +127,10 @@ class TelegramProvider:
         except Exception:
             pass
 
-    def _send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None) -> str:
+    def _send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None, parse_mode: str | None = None) -> str:
         payload: dict = {"chat_id": self._chat_id_override or _chat_id(), "text": text}
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         if buttons:
             payload["reply_markup"] = {
                 "inline_keyboard": [[{"text": label, "callback_data": data} for label, data in row] for row in buttons]
@@ -137,10 +140,21 @@ class TelegramProvider:
         return str(resp.json()["result"]["message_id"])
 
     def send_job_offer(self, application: dict, job: dict) -> str:
-        meta = job_metadata_line(job)
-        meta_suffix = f"\n{meta}" if meta else ""
-        text = f"Found a match\n\n{job['title']} — {job.get('company_name') or 'Unknown Company'}{meta_suffix}\n\nWhat would you like to do?"
-        return self._send(text, buttons=[[("Apply", "APPLY"), ("Skip", "SKIP")]])
+        # HTML parse_mode (Telegram-native rich formatting) so the job
+        # title stands out and each qualifying signal reads as its own
+        # tag -- job title/company are escaped since they're real,
+        # uncontrolled Dice listing text and could otherwise break HTML
+        # parsing or (worst case) inject markup into the sent message.
+        title = html.escape(job["title"])
+        company = html.escape(job.get("company_name") or "Unknown Company")
+        tags = []
+        if job.get("c2c_status") in ("CONFIRMED", "LIKELY"):
+            tags.append("🔵 C2C")
+        if job.get("is_easy_apply"):
+            tags.append("⚡ Easy Apply")
+        tags_line = f"\n{'  '.join(tags)}" if tags else ""
+        text = f"🟣 I found something promising for you\n\n<b>{title}</b> — {company}{tags_line}\n\nWant me to apply?"
+        return self._send(text, buttons=[[("Apply", "APPLY"), ("Skip", "SKIP")]], parse_mode="HTML")
 
     def send_apply_ack(self, application_id: str) -> str:
         return self._send("Checking the application...")
