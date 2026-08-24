@@ -42,7 +42,7 @@ import argparse
 import os
 import sys
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
@@ -69,7 +69,7 @@ from dice.answer_resolution import resolve_safe_answer
 from dice.candidate_adapter import fetch_candidate
 from dice.models import CandidateFetchStatus, CandidateProfile
 from dice_browser.easy_apply import open_easy_apply
-from dice_browser.models import FieldType, QuestionExtractionStatus, QuestionStatus, SubmissionStatus
+from dice_browser.models import FieldType, QuestionExtractionStatus, QuestionStatus, SubmissionResult, SubmissionStatus
 from dice_browser.navigator import open_job
 from dice_browser.questions import extract_questions, is_review_screen
 from dice_browser.resume import detect_existing_resume, upload_resume
@@ -291,6 +291,41 @@ def _gate_and_maybe_submit(
     return _submit_with_verification(page, application_id, dice_job_id, canonical_url)
 
 
+def _resolve_uncertain_via_already_applied(page: Page, canonical_url: str, result: SubmissionResult) -> SubmissionResult:
+    """Live-found 2026-08-24: submission.py's text-match confirmation
+    check can miss a genuinely successful submit (Dice's confirmation
+    banner not yet rendered within the poll window), leaving a real
+    application stuck as VERIFICATION_UNCERTAIN with no automatic path
+    to SUBMITTED -- previously required a human to manually re-check the
+    live job page. Dice's own already_applied signal (the same
+    read-only, no-click check navigator.open_job already does before
+    ever starting a wizard) is authoritative and cannot false-positive
+    here: this job was confirmed NOT already_applied earlier in this
+    same run, before Easy Apply was opened, so True now can only be a
+    result of the submit attempt just made. Anything other than a clean
+    True (False, None, or the re-check itself erroring) leaves `result`
+    untouched -- genuine ambiguity still falls through to
+    FAILED_RETRYABLE for human review, never guessed."""
+    try:
+        recheck = open_job(page, canonical_url)
+    except Exception:  # noqa: BLE001 - best-effort fallback; never let it crash a real submit result
+        return result
+
+    if recheck.already_applied is not True:
+        return result
+
+    return replace(
+        result,
+        status=SubmissionStatus.VERIFIED_SUBMITTED,
+        reason="confirmation text was not detected, but a live re-check confirmed Dice now reports this job as already applied",
+        evidence={
+            **result.evidence,
+            "fallback_check": "already_applied_recheck",
+            "original_reason": result.reason,
+        },
+    )
+
+
 def _submit_with_verification(page: Page, application_id: str, dice_job_id: str, canonical_url: str) -> ApplicationRunResult:
     """AUTHORIZED_AUTONOMOUS path. Never retries: whatever
     submit_application() classifies is recorded once and this function
@@ -309,6 +344,8 @@ def _submit_with_verification(page: Page, application_id: str, dice_job_id: str,
     preconditions = SubmitPreconditions(authenticated=True, no_unresolved_interventions=True, already_verified_submitted=False)
     job_url_fragment = canonical_url.rstrip("/").rsplit("/", 1)[-1]
     result = submit_application(page, job_url_fragment, application_id, dice_job_id, preconditions)
+    if result.status == SubmissionStatus.VERIFICATION_UNCERTAIN:
+        result = _resolve_uncertain_via_already_applied(page, canonical_url, result)
     record_submission_result(application_id, result)
 
     # Regression, live-found 2026-08-22: record_submission_result() only

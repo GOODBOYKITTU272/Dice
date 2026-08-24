@@ -299,6 +299,66 @@ def test_process_one_application_authorized_autonomous_uncertain_never_marks_sub
     assert application["status"] == "FAILED_RETRYABLE"
 
 
+# 8b. Live-found 2026-08-24: a genuinely successful submit whose
+# confirmation banner just wasn't detected in time must self-resolve via
+# a live already_applied re-check, never require a human to manually
+# re-verify -- see worker._resolve_uncertain_via_already_applied.
+def test_process_one_application_uncertain_self_resolves_via_already_applied_recheck(fake_intervention_repo, page, monkeypatch):
+    app = _make_queued_application()
+    _patch_happy_path(monkeypatch)
+    # First open_job call (pre-Easy-Apply) reports not yet applied; the
+    # fallback recheck (post-submit) reports applied -- exactly what a
+    # real successful submit looks like from Dice's own perspective.
+    open_job_calls = {"count": 0}
+
+    def fake_open_job(page, url):
+        open_job_calls["count"] += 1
+        return _nav_result(already_applied=open_job_calls["count"] > 1)
+
+    monkeypatch.setattr(worker, "open_job", fake_open_job)
+    monkeypatch.setattr(
+        worker,
+        "submit_application",
+        lambda page, url, app_id, job_id, preconditions, **kw: SubmissionResult(
+            SubmissionStatus.VERIFICATION_UNCERTAIN,
+            "URL left the wizard but no explicit confirmation text was found",
+            {},
+            app_id,
+            job_id,
+            url,
+            url,
+        ),
+    )
+
+    result = worker.process_one_application(page, CANDIDATE, "test-worker", submission_policy=worker.SubmissionPolicy.AUTHORIZED_AUTONOMOUS)
+
+    assert result.stop_reason == worker.StopReason.VERIFIED_SUBMITTED
+    application = app_repo.get_application(app["id"])
+    assert application["status"] == "SUBMITTED"
+    assert application["verification_evidence"]["fallback_check"] == "already_applied_recheck"
+    assert open_job_calls["count"] == 2
+
+
+# 8c. The fallback must never paper over genuine ambiguity -- if the
+# recheck itself can't confirm applied (still False, or errors), the
+# original uncertain result stands unchanged.
+def test_process_one_application_uncertain_stays_uncertain_when_recheck_says_not_applied(fake_intervention_repo, page, monkeypatch):
+    app = _make_queued_application()
+    _patch_happy_path(monkeypatch)  # open_job always reports already_applied=False
+    monkeypatch.setattr(
+        worker,
+        "submit_application",
+        lambda page, url, app_id, job_id, preconditions, **kw: SubmissionResult(
+            SubmissionStatus.VERIFICATION_UNCERTAIN, "no evidence", {}, app_id, job_id, url, url
+        ),
+    )
+
+    result = worker.process_one_application(page, CANDIDATE, "test-worker", submission_policy=worker.SubmissionPolicy.AUTHORIZED_AUTONOMOUS)
+
+    assert result.stop_reason == worker.StopReason.VERIFICATION_UNCERTAIN
+    assert app_repo.get_application(app["id"])["status"] == "FAILED_RETRYABLE"
+
+
 def test_process_one_application_authorized_autonomous_submit_failed_marks_failed_not_stuck_submitting(fake_intervention_repo, page, monkeypatch):
     app = _make_queued_application()
     _patch_happy_path(monkeypatch)
