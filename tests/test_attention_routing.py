@@ -51,6 +51,7 @@ def test_routes_to_telegram_when_both_bound(monkeypatch):
 # 24. secondary fallback can select iMessage
 def test_falls_back_to_imessage_when_telegram_unconfigured(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.setenv("LOOPMESSAGE_AUTH_KEY", "test-key")
     candidate_id = str(uuid.uuid4())
     tg = bind_channel(candidate_id, "TELEGRAM", _new_external_id())
     im = bind_channel(candidate_id, "IMESSAGE", _new_external_id())

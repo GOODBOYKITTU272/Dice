@@ -12,6 +12,7 @@ from __future__ import annotations
 from attention.channels import consume_link_code, resolve_candidate_for_identity
 from attention.events import already_processed_inbound
 from attention.providers.imessage import IMessageProvider, read_new_messages
+from attention.providers.loopmessage import LoopMessageProvider
 from attention.providers.telegram import TelegramProvider
 from attention.service import UnresolvableEventError, handle_event
 from db.supabase_client import get_supabase_client
@@ -153,3 +154,41 @@ def poll_imessage_once(provider: IMessageProvider, contact: str) -> list[str]:
     offset = _last_seen_external_id("IMESSAGE")
     rows = read_new_messages(contact, since_rowid=offset or 0)
     return [process_imessage_row(provider, contact, row) for row in rows]
+
+
+def process_loopmessage_webhook(payload: dict) -> str:
+    """Real-time counterpart to process_imessage_row/process_telegram_
+    update -- LoopMessage pushes one webhook call per inbound message
+    (no polling/offset needed; each delivery is a discrete event). Same
+    "IMESSAGE" channel, same link-code/dedupe/routing logic. Never
+    raises for a malformed or non-message-inbound payload -- always a
+    safe no-op, since the webhook receiver must return 200 regardless
+    or LoopMessage will retry it for up to a day."""
+    if payload.get("event") != "message_inbound":
+        return "ignored_non_message_event"
+
+    contact = payload.get("contact")
+    external_message_id = payload.get("message_id")
+    if not contact or not external_message_id:
+        return "ignored_no_op"
+    external_message_id = str(external_message_id)
+
+    text = payload.get("text")
+    linked_candidate_id = _try_consume_as_link_code("IMESSAGE", text, contact)
+    if linked_candidate_id is not None:
+        return "linked"
+
+    candidate_id = resolve_candidate_for_identity("IMESSAGE", contact)
+    if candidate_id is None:
+        return "ignored_unknown_sender"
+
+    if already_processed_inbound("IMESSAGE", external_message_id):
+        return "duplicate"
+
+    provider = LoopMessageProvider(contact=contact)
+    event = provider.parse_inbound(payload)
+    try:
+        handle_event(provider, event, candidate_id)
+    except UnresolvableEventError:
+        return "ignored_stale"
+    return "processed"

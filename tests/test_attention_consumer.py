@@ -31,7 +31,11 @@ class _FakeTelegramResponse:
         pass
 
     def json(self):
-        return {"ok": True, "result": {"message_id": 1}}
+        # Shaped for both Telegram (result.message_id) and LoopMessage
+        # (top-level message_id) response parsing -- one shared fake
+        # response for every provider's send call this file's blanket
+        # _no_real_transports fixture intercepts.
+        return {"ok": True, "result": {"message_id": 1}, "message_id": "fake-loopmessage-id", "success": True}
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +51,7 @@ def _no_real_transports(monkeypatch):
     attempt once Apply/Skip started sending acknowledgements."""
     monkeypatch.setattr(subprocess, "run", lambda *a, **kw: None)
     monkeypatch.setattr(requests, "post", lambda *a, **kw: _FakeTelegramResponse())
+    monkeypatch.setenv("LOOPMESSAGE_AUTH_KEY", "test-key")
 
 
 def _make_test_job():
@@ -335,3 +340,83 @@ def test_imessage_duplicate_rowid_processed_once():
 
     assert first == "processed"
     assert second == "duplicate"
+
+
+# ── LoopMessage webhook (Phase 7.11) ────────────────────────────────────
+# Same "IMESSAGE" channel/dedupe/link-code logic as the local-Mac
+# provider above, real-time (one webhook call per message) instead of
+# polled -- these prove process_loopmessage_webhook's dispatch, not the
+# real LoopMessage network call (test_attention_loopmessage.py covers
+# LoopMessageProvider itself in isolation).
+
+
+def test_loopmessage_link_code_links_correct_candidate():
+    candidate_id = str(uuid.uuid4())
+    code = create_link_code(candidate_id, "IMESSAGE")
+    _created_codes.append(code)
+    contact = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+
+    result = consumer.process_loopmessage_webhook({"event": "message_inbound", "contact": contact, "text": code, "message_id": "lm-1"})
+
+    assert result == "linked"
+    row = get_supabase_client().table("candidate_attention_channels").select("id").eq("channel", "IMESSAGE").eq("external_user_id", contact).execute().data[0]
+    _created_channel_rows.append(row["id"])
+
+
+def test_loopmessage_unknown_sender_ignored():
+    result = consumer.process_loopmessage_webhook({"event": "message_inbound", "contact": "+15559999999", "text": "APPLY", "message_id": "lm-2"})
+    assert result == "ignored_unknown_sender"
+
+
+def test_loopmessage_apply_from_bound_sender_is_processed():
+    candidate_id = str(uuid.uuid4())
+    contact = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+    row = bind_channel(candidate_id, "IMESSAGE", contact, verified=True)
+    _created_channel_rows.append(row["id"])
+    job = _make_test_job()
+    offer = create_job_offer(candidate_id, job["id"])
+
+    result = consumer.process_loopmessage_webhook({"event": "message_inbound", "contact": contact, "text": "APPLY", "message_id": "lm-3"})
+
+    assert result == "processed"
+    assert get_application(offer["id"])["status"] == "QUEUED"
+
+
+def test_loopmessage_skip_from_bound_sender_is_processed():
+    candidate_id = str(uuid.uuid4())
+    contact = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+    row = bind_channel(candidate_id, "IMESSAGE", contact, verified=True)
+    _created_channel_rows.append(row["id"])
+    job = _make_test_job()
+    offer = create_job_offer(candidate_id, job["id"])
+
+    result = consumer.process_loopmessage_webhook({"event": "message_inbound", "contact": contact, "text": "SKIP", "message_id": "lm-4"})
+
+    assert result == "processed"
+    assert get_application(offer["id"])["status"] == "SKIPPED"
+
+
+def test_loopmessage_duplicate_message_id_processed_once():
+    candidate_id = str(uuid.uuid4())
+    contact = f"+1555{uuid.uuid4().int % 10_000_000:07d}"
+    row = bind_channel(candidate_id, "IMESSAGE", contact, verified=True)
+    _created_channel_rows.append(row["id"])
+    job = _make_test_job()
+    offer = create_job_offer(candidate_id, job["id"])
+    payload = {"event": "message_inbound", "contact": contact, "text": "SKIP", "message_id": "lm-5"}
+
+    first = consumer.process_loopmessage_webhook(payload)
+    second = consumer.process_loopmessage_webhook(payload)
+
+    assert first == "processed"
+    assert second == "duplicate"
+
+
+def test_loopmessage_non_message_event_ignored():
+    result = consumer.process_loopmessage_webhook({"event": "message_delivered", "contact": "+15551234567", "message_id": "lm-6"})
+    assert result == "ignored_non_message_event"
+
+
+def test_loopmessage_missing_contact_or_message_id_ignored():
+    assert consumer.process_loopmessage_webhook({"event": "message_inbound", "text": "APPLY", "message_id": "lm-7"}) == "ignored_no_op"
+    assert consumer.process_loopmessage_webhook({"event": "message_inbound", "contact": "+15551234567", "text": "APPLY"}) == "ignored_no_op"

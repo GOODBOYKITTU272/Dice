@@ -19,22 +19,20 @@ def _provider_for_channel_row(row: dict):
 
         return TelegramProvider(chat_id=row["external_user_id"])
     if row["channel"] == "IMESSAGE":
-        from attention.providers.imessage import IMessageProvider
+        from attention.providers.loopmessage import LoopMessageProvider
 
-        return IMessageProvider(contact=row["external_user_id"])
+        return LoopMessageProvider(contact=row["external_user_id"])
     return None
 
 
 def _channel_configured(channel: str) -> bool:
     # Telegram needs the bot token (env, never the candidate's row) to
-    # send anything at all. iMessage needs no extra env config to send
-    # to a specific bound contact -- the row itself is sufficient (macOS
-    # Automation permission, if missing, fails at the actual send call,
-    # already caught by the try/except above).
+    # send anything at all. iMessage (via LoopMessage, Phase 7.11) needs
+    # its own API key configured the same way.
     if channel == "TELEGRAM":
         return bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
     if channel == "IMESSAGE":
-        return True
+        return bool(os.environ.get("LOOPMESSAGE_AUTH_KEY"))
     return False
 
 
