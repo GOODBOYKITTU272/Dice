@@ -233,7 +233,27 @@ persisted policy (Phase 6.4). Adding one here would override *every* run
 this worker ever claims; only do that for an explicit, temporary debug
 session, never for the standing service.
 
-## 9. Verify heartbeat ONLINE
+## 9. Start the Telegram consumer service
+
+Independent of the worker/browser stack above -- it only needs
+`TELEGRAM_BOT_TOKEN` and Supabase, never touches the browser, and long-
+polls Telegram continuously so an Apply/Skip/Confirm/Edit tap is picked
+up within seconds instead of only when someone happens to run a manual
+poll script.
+
+```bash
+sudo cp deploy/cloud-worker/dicepilot-telegram-consumer.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now dicepilot-telegram-consumer
+sudo systemctl status dicepilot-telegram-consumer
+```
+
+Same readiness-check-before-starting behavior as the worker (Telegram
+reachable, Supabase reachable) -- `journalctl -u
+dicepilot-telegram-consumer -n 30` shows PASS/FAIL per check if it
+exits immediately after starting.
+
+## 10. Verify heartbeat ONLINE
 
 ```bash
 deploy/cloud-worker/healthcheck.sh
@@ -247,32 +267,32 @@ Or from the repo root:
 
 Expect `{'online': True, 'status': 'ONLINE', ...}`.
 
-## 10. Verify Vercel shows worker/browser/auth truth
+## 11. Verify Vercel shows worker/browser/auth truth
 
 Open `https://dice-beta-eight.vercel.app/worker` — should show `Worker:
 ONLINE` and `Browser / Dice Login: Online`. Create a small test run (or
 check an existing one's Run Progress page) and confirm the same status
 appears there.
 
-## 11. Reboot the VM
+## 12. Reboot the VM
 
 ```bash
 sudo reboot
 ```
 
-## 12. Verify services return automatically
+## 13. Verify services return automatically
 
 After the VM comes back:
 
 ```bash
-systemctl status dicepilot-browser dicepilot-worker
+systemctl status dicepilot-browser dicepilot-worker dicepilot-telegram-consumer
 ```
 
-Both should show `active (running)` without any manual intervention —
-`Restart=always` plus `WantedBy=multi-user.target` in both unit files
-handles both crash-restart and boot-start.
+All three should show `active (running)` without any manual
+intervention — `Restart=always` plus `WantedBy=multi-user.target` in
+every unit file handles both crash-restart and boot-start.
 
-## 13. Confirm the browser profile survives reboot
+## 14. Confirm the browser profile survives reboot
 
 ```bash
 deploy/cloud-worker/healthcheck.sh
@@ -294,4 +314,7 @@ profile directory isn't actually on durable storage — revisit step 5.
 - If Vercel shows **Security Challenge**, same procedure — resolve the
   CAPTCHA/OTP/verification directly in the forwarded browser window.
 - `journalctl -u dicepilot-worker -f` / `journalctl -u dicepilot-browser -f`
-  for live logs.
+  / `journalctl -u dicepilot-telegram-consumer -f` for live logs.
+- Apply/Skip/Confirm/Edit taps in Telegram now reach the system within
+  seconds on their own, with the always-on consumer running — no manual
+  poll script, no terminal, ever, for normal operation.

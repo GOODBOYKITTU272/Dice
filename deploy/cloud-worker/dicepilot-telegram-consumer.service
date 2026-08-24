@@ -1,0 +1,16 @@
+[Unit]
+Description=DicePilot Telegram consumer (long-polls Apply/Skip/Confirm/Edit taps)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dicepilot
+WorkingDirectory=/opt/dicepilot/dice
+EnvironmentFile=/opt/dicepilot/dice/.env
+ExecStart=/opt/dicepilot/dice/.venv/bin/python -m attention.telegram_consumer_daemon
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

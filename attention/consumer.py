@@ -109,9 +109,15 @@ def process_telegram_update(provider: TelegramProvider, raw_update: dict) -> str
     return "processed"
 
 
-def poll_telegram_once(provider: TelegramProvider) -> list[str]:
+def poll_telegram_once(provider: TelegramProvider, timeout: int = 0) -> list[str]:
+    """timeout=0 (the default, unchanged from Phase 7.5) returns
+    immediately -- what every existing manual/test poll uses. A real
+    always-on consumer (Phase 7.8) passes a real long-poll timeout
+    (Telegram holds the connection open until an update arrives or the
+    timeout elapses) instead of tight-looping with a sleep -- much lower
+    latency for a real Apply tap, far fewer API calls."""
     offset = _last_seen_external_id("TELEGRAM")
-    updates = provider.fetch_updates(offset=(offset + 1) if offset is not None else None)
+    updates = provider.fetch_updates(offset=(offset + 1) if offset is not None else None, timeout=timeout)
     return [process_telegram_update(provider, u) for u in updates]
 
 
