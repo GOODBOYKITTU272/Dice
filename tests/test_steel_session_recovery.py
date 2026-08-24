@@ -160,6 +160,56 @@ def test_resolve_steel_base_url_prefers_explicit_env(monkeypatch):
     assert resolve_steel_base_url("ws://localhost:3000/") == "http://steel.internal:3000"
 
 
+# Phase 2 (Railway deployment): the worker must never assume Steel always
+# runs on port 3000, and must never treat Steel's own self-reported
+# session URL (which can be a meaningless bind address like 0.0.0.0) as a
+# real connection target. resolve_steel_base_url only ever derives from
+# the OPERATOR-configured DICEPILOT_CDP_URL/STEEL_BASE_URL -- never from
+# a session's own JSON -- so whatever port/host that config carries
+# (Railway's 8080, a private *.railway.internal DNS name, or anything
+# else) passes through untouched, with no hardcoded port anywhere.
+def test_resolve_steel_base_url_preserves_railway_private_dns_and_port(monkeypatch):
+    monkeypatch.delenv("STEEL_BASE_URL", raising=False)
+    assert (
+        resolve_steel_base_url("ws://steel-browser-api.railway.internal:8080/")
+        == "http://steel-browser-api.railway.internal:8080/"
+    )
+
+
+def test_resolve_steel_base_url_preserves_url_with_no_port(monkeypatch):
+    monkeypatch.delenv("STEEL_BASE_URL", raising=False)
+    assert resolve_steel_base_url("ws://steel-browser-api.railway.internal/") == "http://steel-browser-api.railway.internal/"
+
+
+def test_resolve_steel_base_url_passthrough_on_scheme_less_input(monkeypatch):
+    monkeypatch.delenv("STEEL_BASE_URL", raising=False)
+    # No ws:// / wss:// prefix to rewrite -- passed through unchanged
+    # rather than guessed at. The network call this then feeds
+    # (steel_api_healthy/ensure_steel_session) fails cleanly and reports
+    # SteelUnavailableError; there's no separate validation layer to
+    # maintain for a config error that already surfaces obviously.
+    assert resolve_steel_base_url("not-a-url") == "not-a-url"
+
+
+def test_ensure_steel_session_zero_bind_address_in_response_is_never_used_as_connect_target(monkeypatch):
+    # Steel's self-hosted session JSON can report websocketUrl as
+    # ws://0.0.0.0:8080/ -- a bind address, not a dialable host. Proves
+    # the worker never reads that field: ensure_steel_session's return
+    # value is discarded by every caller, and the real CDP connection
+    # always uses the operator-configured cdp_url instead.
+    monkeypatch.setattr(
+        worker_daemon,
+        "ensure_steel_session",
+        lambda base_url: {"id": "x", "status": "live", "websocketUrl": "ws://0.0.0.0:8080/"},
+    )
+    monkeypatch.setattr(worker_daemon, "clean_stale_singleton_locks", lambda profile_dir: [])
+    seen_cdp_urls = []
+    monkeypatch.setattr(worker_daemon, "_connect", lambda cdp_url: seen_cdp_urls.append(cdp_url) or ("pw", "page"))
+
+    worker_daemon._connect_for_provider("ws://steel-browser-api.railway.internal:8080/", "steel")
+    assert seen_cdp_urls == ["ws://steel-browser-api.railway.internal:8080/"]
+
+
 # 5 & 12. A CDP disconnect triggers recovery, bounded -- never infinite --
 # and succeeds once the underlying problem clears up.
 def test_connect_with_recovery_retries_bounded_then_succeeds(monkeypatch):
