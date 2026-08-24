@@ -22,6 +22,44 @@ def test_provider_selects_steel_from_env(monkeypatch):
     assert resolve_browser_provider() == "steel"
 
 
+# Phase 7.6: Browserless provider selected from env -- same CDP-attach
+# path as steel/local, DICEPILOT_CDP_URL is just the persisted session's
+# own connect websocket URL, no provider-specific connect logic needed.
+def test_provider_selects_browserless_from_env(monkeypatch):
+    monkeypatch.setenv("DICEPILOT_BROWSER_PROVIDER", "browserless")
+    assert resolve_browser_provider() == "browserless"
+
+
+def test_browserless_provider_uses_configured_cdp_url(monkeypatch):
+    monkeypatch.setenv("DICEPILOT_BROWSER_PROVIDER", "browserless")
+    monkeypatch.setenv("DICEPILOT_CDP_URL", "wss://production-sfo.browserless.io/session-connect")
+    assert resolve_browser_provider() == "browserless"
+    assert worker_daemon.default_cdp_url() == "wss://production-sfo.browserless.io/session-connect"
+
+
+def test_main_skips_singleton_cleanup_for_browserless_provider(monkeypatch):
+    monkeypatch.setenv("DICEPILOT_BROWSER_PROVIDER", "browserless")
+    calls = []
+    monkeypatch.setattr(worker_daemon, "clean_stale_singleton_locks", lambda profile_dir: calls.append(profile_dir) or [])
+    monkeypatch.setattr(worker_daemon, "run_daemon", lambda *a, **kw: None)
+    import run_registry
+
+    monkeypatch.setattr(run_registry, "recover_stale_applications", lambda: {"requeued": [], "needs_verification": []})
+    monkeypatch.setattr(run_registry, "recover_orphaned_runs", lambda: [])
+
+    worker_daemon.main([])
+    assert calls == []
+
+
+def test_worker_page_shows_browserless_provider(monkeypatch):
+    from local_app.app import app
+
+    monkeypatch.setenv("DICEPILOT_BROWSER_PROVIDER", "browserless")
+    body = app.test_client().get("/worker").get_data(as_text=True)
+    assert "Browser Provider" in body
+    assert "Browserless" in body
+
+
 def test_provider_is_case_insensitive(monkeypatch):
     monkeypatch.setenv("DICEPILOT_BROWSER_PROVIDER", "STEEL")
     assert resolve_browser_provider() == "steel"

@@ -39,6 +39,7 @@ self-heals.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -96,6 +97,7 @@ class StopReason(str, Enum):
     VERIFICATION_UNCERTAIN = "VERIFICATION_UNCERTAIN"
     SUBMIT_FAILED = "SUBMIT_FAILED"
     VERIFIED_SUBMITTED = "VERIFIED_SUBMITTED"
+    PROOF_STOP_EASY_APPLY_OPENED = "PROOF_STOP_EASY_APPLY_OPENED"
 
 
 # Stops that mean something is wrong at the session/worker level, not
@@ -120,6 +122,18 @@ class WorkerRunSummary:
 
 def _fail(application_id: str, status: str, error_code: str, error_message: str) -> None:
     update_application_status(application_id, status, error_code=error_code, error_message=error_message)
+
+
+_PROOF_STOP_ENV_VAR = "DICEPILOT_PROOF_STOP_AFTER_EASY_APPLY_OPEN"
+
+
+def _proof_stop_after_easy_apply_open() -> bool:
+    """Env-gated, default-off. For live-proving the Telegram->Browserless
+    bridge reaches the real Easy Apply wizard without ever risking a real
+    resume upload, question fill, or Submit. Deliberately never committed
+    enabled -- read fresh from the environment each call, no code-level
+    default other than False."""
+    return os.environ.get(_PROOF_STOP_ENV_VAR, "").strip().lower() in ("1", "true", "yes")
 
 
 def _load_candidate(candidate_id: str) -> CandidateProfile | None:
@@ -377,6 +391,14 @@ def process_one_application(
         _fail(application_id, "FAILED_RETRYABLE", "EASY_APPLY_OPEN_FAILED", open_result.reason)
         return ApplicationRunResult(application_id, dice_job_id, StopReason.EASY_APPLY_OPEN_FAILED, open_result.reason)
     add_event(application_id, event_type="easy_apply_opened", step="CLICK_EASY_APPLY", message=open_result.reason)
+
+    if _proof_stop_after_easy_apply_open():
+        # Live-proof-only hard stop: the wizard is open, nothing past this
+        # point has run (no resume upload, no question fill, no Submit).
+        # Deliberately does NOT call _fail() -- the application stays
+        # PROCESSING (already set by the atomic claim), which is honest:
+        # this run genuinely is still in progress, just paused for proof.
+        return ApplicationRunResult(application_id, dice_job_id, StopReason.PROOF_STOP_EASY_APPLY_OPENED, open_result.reason)
 
     existing_resume = detect_existing_resume(page)
     if existing_resume is False:

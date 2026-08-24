@@ -443,3 +443,43 @@ def test_resume_needs_input_application_fills_resolved_answer_and_reaches_review
     result = worker.resume_needs_input_application(page, app["id"], "test-worker")
     assert filled == {"onsite-q-uuid": "Yes"}
     assert result.stop_reason == worker.StopReason.AWAITING_SUBMIT_CONFIRMATION
+
+
+# ── Phase 7.6: DICEPILOT_PROOF_STOP_AFTER_EASY_APPLY_OPEN ────────────────
+# Env-gated, default-off guard for live-proving the Telegram->Browserless
+# bridge up to the real Easy Apply wizard without ever risking a real
+# resume upload/question fill/submit. Deliberately reuses PROCESSING
+# (the status the atomic claim already set) rather than inventing a new
+# terminal status just for this proof.
+
+
+def test_process_one_application_proof_stop_after_easy_apply_open(fake_intervention_repo, page, monkeypatch):
+    app = _make_queued_application()
+    _patch_happy_path(monkeypatch)
+    monkeypatch.setenv("DICEPILOT_PROOF_STOP_AFTER_EASY_APPLY_OPEN", "true")
+
+    def _must_not_be_called(*a, **kw):
+        raise AssertionError("resume/question/submit flow must never run when the proof-stop guard is active")
+
+    monkeypatch.setattr(worker, "detect_existing_resume", _must_not_be_called)
+    monkeypatch.setattr(worker, "click_next", _must_not_be_called)
+    monkeypatch.setattr(worker, "extract_questions", _must_not_be_called)
+
+    result = worker.process_one_application(page, CANDIDATE, "test-worker")
+
+    assert result.application_id == app["id"]
+    assert result.stop_reason == worker.StopReason.PROOF_STOP_EASY_APPLY_OPENED
+    assert app_repo.get_application(app["id"])["status"] == "PROCESSING"
+
+    events = [e for e in app_repo.get_supabase_client().tables["application_events"] if e["application_id"] == app["id"]]
+    assert any(e["event_type"] == "easy_apply_opened" for e in events)
+
+
+def test_process_one_application_proof_stop_disabled_by_default(fake_intervention_repo, page, monkeypatch):
+    app = _make_queued_application()
+    _patch_happy_path(monkeypatch)
+    monkeypatch.delenv("DICEPILOT_PROOF_STOP_AFTER_EASY_APPLY_OPEN", raising=False)
+
+    result = worker.process_one_application(page, CANDIDATE, "test-worker")
+
+    assert result.stop_reason != worker.StopReason.PROOF_STOP_EASY_APPLY_OPENED

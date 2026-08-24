@@ -242,3 +242,39 @@ def test_run_worker_for_run_finishes_cleanly_when_nothing_left_to_claim(live_cli
         assert app_repo.get_application(app["id"])["status"] == "FAILED"  # untouched, not re-processed
     finally:
         _cleanup(job["id"], run_ids=[run["id"]])
+
+
+# 8. Phase 7.6: the Telegram Apply bridge -- a QUEUED application/run
+# created via attention.service.handle_apply() (exactly what a real
+# Telegram Apply tap produces) is claimed and processed by the real
+# worker exactly like any other QUEUED application -- the worker has no
+# special case for how QUEUED status was reached. Also exercises the
+# live-proof guard (DICEPILOT_PROOF_STOP_AFTER_EASY_APPLY_OPEN) inside
+# the real run_worker_for_run path, not just process_one_application
+# directly.
+def test_run_worker_for_run_processes_telegram_apply_created_application(live_client, page, monkeypatch):
+    from attention.service import handle_apply
+    from db.application_repository import create_job_offer
+
+    job = app_repo.upsert_dice_job(
+        {"dice_job_id": "RUN-TELEGRAM-BRIDGE", "canonical_url": "https://dice.com/job-detail/RUN-TELEGRAM-BRIDGE", "title": "Worker Test Role"}
+    )
+    offer = create_job_offer(CANDIDATE, job["id"])
+    handle_apply(offer["id"])  # exactly what attention.service.handle_event does on a real Apply tap
+    application = app_repo.get_application(offer["id"])
+    run_id = application["run_id"]
+    assert run_id is not None
+    assert application["status"] == "QUEUED"
+
+    _patch_happy_path(monkeypatch)
+    monkeypatch.setenv("DICEPILOT_PROOF_STOP_AFTER_EASY_APPLY_OPEN", "true")
+    try:
+        summary = worker.run_worker_for_run(page, run_id, "test-worker")
+
+        job_results = [r for r in summary.processed if r.application_id is not None]
+        assert len(job_results) == 1
+        assert job_results[0].application_id == offer["id"]
+        assert job_results[0].stop_reason == worker.StopReason.PROOF_STOP_EASY_APPLY_OPENED
+        assert app_repo.get_application(offer["id"])["status"] == "PROCESSING"
+    finally:
+        _cleanup(job["id"], run_ids=[run_id])
