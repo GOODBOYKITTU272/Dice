@@ -17,6 +17,8 @@ from playwright.sync_api import sync_playwright
 
 import db.application_repository as app_repo
 import dice_browser.worker as worker
+from attention.channels import bind_channel
+from db.supabase_client import get_supabase_client
 from dice.models import CandidateFetchResult, CandidateFetchStatus, CandidateProfile
 from dice_browser.models import (
     BrowserState,
@@ -180,6 +182,43 @@ def test_process_one_application_auth_required_stops(fake_intervention_repo, pag
     result = worker.process_one_application(page, CANDIDATE, "test-worker")
     assert result.stop_reason == worker.StopReason.AUTH_REQUIRED
     assert app_repo.get_application(app["id"])["status"] == "FAILED_RETRYABLE"
+
+
+# Real gap, live-found 2026-08-24/25: every failure path went through
+# _fail() but never told the candidate -- a real user who tapped Apply
+# would see "Checking the application..." and then silence forever on
+# anything but a genuine SUBMITTED. _fail() now best-effort notifies
+# through whatever channel is actually bound.
+def test_process_one_application_failure_notifies_bound_candidate(fake_intervention_repo, page, monkeypatch, request):
+    import requests
+
+    app = _make_queued_application()
+    channel = bind_channel(CANDIDATE, "TELEGRAM", "12345", verified=True)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    request.addfinalizer(lambda: get_supabase_client().table("candidate_attention_channels").delete().eq("id", channel["id"]).execute())
+
+    sent = []
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"ok": True, "result": {"message_id": 1}}
+
+    def fake_post(url, json=None, **kw):
+        sent.append((url, json))
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr(worker, "open_job", lambda page, url: _nav_result(authenticated=False))
+
+    worker.process_one_application(page, CANDIDATE, "test-worker")
+
+    failure_sends = [call for call in sent if "sendMessage" in call[0]]
+    assert len(failure_sends) == 1
+    assert failure_sends[0][1]["chat_id"] == "12345"
+    assert "AUTH_REQUIRED" in failure_sends[0][1]["text"] or "auth" in failure_sends[0][1]["text"].lower()
 
 
 # 4. Security challenge stops safely

@@ -49,6 +49,8 @@ from typing import Any
 from playwright.sync_api import Page
 
 import run_registry
+from attention.routing import send_via_primary_with_fallback
+from attention.service import notify_submission_failure
 from db.application_repository import (
     add_event,
     claim_next_queued_application,
@@ -121,7 +123,19 @@ class WorkerRunSummary:
 
 
 def _fail(application_id: str, status: str, error_code: str, error_message: str) -> None:
-    update_application_status(application_id, status, error_code=error_code, error_message=error_message)
+    application = update_application_status(application_id, status, error_code=error_code, error_message=error_message)
+    # Real gap, live-found 2026-08-24/25: this was the only place a
+    # candidate's application ever actually stops -- and until now it
+    # never told them. A real user who tapped Apply and got an
+    # immediate "Checking the application..." ack would then wait
+    # indefinitely for a result that was never coming on failure paths
+    # (only a real SUBMITTED ever triggered a message back). Best-effort
+    # by design: a notification failure must never mask or override the
+    # real DB status transition above, which has already happened.
+    try:
+        send_via_primary_with_fallback(application["candidate_id"], notify_submission_failure, application_id, error_message)
+    except Exception:
+        pass
 
 
 _PROOF_STOP_ENV_VAR = "DICEPILOT_PROOF_STOP_AFTER_EASY_APPLY_OPEN"

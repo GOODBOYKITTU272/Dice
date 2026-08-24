@@ -61,6 +61,27 @@ def open_job(page: Page, canonical_url: str) -> NavigationResult:
         )
 
     auth_state = classify_authentication(page)
+    reloaded_for_auth = False
+    if auth_state == BrowserState.AUTH_REQUIRED:
+        # Real root cause, live-found 2026-08-24/25: a brand-new browser
+        # context (exactly what a fresh Browserless connect gives every
+        # claim) reliably shows a logged-out header on the FIRST paint
+        # even with genuinely valid, unexpired cookies -- a client-side
+        # hydration race on Dice's own frontend, not an actually dead
+        # session (confirmed: the token's own inactivity_exp claim was
+        # still hours away every time this was live-reproduced). A
+        # single reload consistently resolves it. This was very likely
+        # the real cause behind most/all of tonight's AUTH_REQUIRED
+        # stops -- retried here once, cheaply, before ever concluding
+        # the session is genuinely dead.
+        page.reload(wait_until="domcontentloaded")
+        try:
+            page.wait_for_load_state("networkidle", timeout=15_000)
+        except Exception:
+            pass
+        auth_state = classify_authentication(page)
+        reloaded_for_auth = True
+
     authenticated = auth_state == BrowserState.ACTIVE
     easy_apply_visible = _detect_easy_apply(page)
     # Already-applied is inherently a per-account signal — Dice can't show
@@ -68,11 +89,12 @@ def open_job(page: Page, canonical_url: str) -> NavigationResult:
     # (None), never guessed False, unless we're confirmed authenticated.
     already_applied = _detect_already_applied(page) if authenticated else None
 
-    evidence = (
-        "page loaded and inspected; no security challenge detected"
-        if auth_state != BrowserState.NEEDS_INPUT
-        else "auth signals ambiguous or conflicting — never guessed"
-    )
+    if auth_state == BrowserState.NEEDS_INPUT:
+        evidence = "auth signals ambiguous or conflicting — never guessed"
+    elif reloaded_for_auth:
+        evidence = f"page loaded and inspected; auth state resolved via one reload retry ({auth_state.value})"
+    else:
+        evidence = "page loaded and inspected; no security challenge detected"
     return NavigationResult(
         canonical_url=canonical_url,
         page_title=_safe_title(page),

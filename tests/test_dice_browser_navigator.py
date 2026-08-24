@@ -55,13 +55,39 @@ def test_validate_canonical_url_rejects_non_job_detail_urls(bad_url):
 def _prep(page, html: str, url: str = "https://www.dice.com/job-detail/fake-id-for-test"):
     # open_job() itself calls page.goto(); for offline tests we monkeypatch
     # goto to just set_content, since we're not hitting the network.
-    original_goto = page.goto
-
+    # reload() is patched the same way -- open_job's own auth-recovery
+    # retry calls page.reload(), which must re-render the same synthetic
+    # content here, not fall through to a real navigation.
     def fake_goto(target_url, **kwargs):
         page.set_content(html)
         return None
 
+    def fake_reload(**kwargs):
+        page.set_content(html)
+        return None
+
     page.goto = fake_goto
+    page.reload = fake_reload
+    return page
+
+
+def _prep_sequence(page, html_sequence: list[str]):
+    """Like _prep, but goto() renders html_sequence[0] and each reload()
+    advances to the next entry -- simulates a page whose auth state
+    changes between the initial load and a reload."""
+    state = {"index": 0}
+
+    def fake_goto(target_url, **kwargs):
+        page.set_content(html_sequence[0])
+        return None
+
+    def fake_reload(**kwargs):
+        state["index"] = min(state["index"] + 1, len(html_sequence) - 1)
+        page.set_content(html_sequence[state["index"]])
+        return None
+
+    page.goto = fake_goto
+    page.reload = fake_reload
     return page
 
 
@@ -102,6 +128,41 @@ def test_open_job_auth_required_when_not_authenticated(page):
     assert result.easy_apply_visible is True
     # already_applied is inherently a per-account signal — unknown, not False, when logged out.
     assert result.already_applied is None
+
+
+# Real root cause, live-found 2026-08-24/25: a fresh browser context's
+# FIRST page load can show a logged-out header even with genuinely valid
+# cookies -- a client-side hydration race, not a dead session. A single
+# reload consistently resolves it live; these tests prove open_job()'s
+# own reload-and-recheck retry, not the real Dice frontend.
+_LOGIN_HTML = '<html><body><a href="/dashboard/login">Login</a></body></html>'
+_AUTHENTICATED_HTML = '<html><body><nav aria-label="Account"></nav></body></html>'
+
+
+def test_open_job_recovers_from_transient_auth_required_via_reload(page):
+    _prep_sequence(page, [_LOGIN_HTML, _AUTHENTICATED_HTML])
+    result = open_job(page, "https://www.dice.com/job-detail/fake-id-for-test")
+    assert result.browser_state == BrowserState.ACTIVE
+    assert result.authenticated is True
+    assert "reload retry" in result.evidence
+
+
+def test_open_job_stays_auth_required_when_reload_does_not_help(page):
+    _prep_sequence(page, [_LOGIN_HTML, _LOGIN_HTML])
+    result = open_job(page, "https://www.dice.com/job-detail/fake-id-for-test")
+    assert result.browser_state == BrowserState.AUTH_REQUIRED
+    assert result.authenticated is False
+
+
+def test_open_job_never_reloads_when_already_authenticated_on_first_load(page):
+    reload_calls = []
+    _prep(page, _AUTHENTICATED_HTML)
+    page.reload = lambda **kw: reload_calls.append(1)
+
+    result = open_job(page, "https://www.dice.com/job-detail/fake-id-for-test")
+
+    assert result.browser_state == BrowserState.ACTIVE
+    assert reload_calls == []  # never reloads when the first load already resolved cleanly
 
 
 def test_open_job_detects_easy_apply_absent(page):
