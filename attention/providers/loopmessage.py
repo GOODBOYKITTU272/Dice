@@ -75,7 +75,7 @@ class LoopMessageProvider:
         meta_suffix = f"\n{meta}" if meta else ""
         text = (
             f"Found a match:\n\n{job['title']} — {job.get('company_name') or 'Unknown Company'}{meta_suffix}\n\n"
-            "Reply:\nAPPLY\nor\nSKIP"
+            'Reply "yes apply" to apply, or "no skip" to skip'
         )
         return self._send(text)
 
@@ -99,7 +99,7 @@ class LoopMessageProvider:
         return self._send(text)
 
     def send_answer_confirmation(self, application_id: str, question_id: str, raw_answer: str) -> str:
-        text = f"You answered:\n{raw_answer}\n\nReply:\nCONFIRM\nor\nEDIT"
+        text = f'You answered:\n{raw_answer}\n\nReply "yes confirm" to confirm, or "no edit" to change it'
         return self._send(text)
 
     def send_submission_success(self, application: dict, job: dict) -> str:
@@ -117,10 +117,22 @@ class LoopMessageProvider:
         {"event": "message_inbound", "contact", "text", "message_id", ...}.
         external_message_id is LoopMessage's own message_id (a real,
         unique-per-message UUID -- exactly what inbound dedupe needs),
-        never re-derived or guessed."""
+        never re-derived or guessed.
+
+        Real, live-found 2026-08-24: LoopMessage's own inbound pipeline
+        silently drops short bare-word replies (exactly "APPLY", "SKIP",
+        etc.) by misclassifying them as OTP codes -- confirmed by their
+        support, who recommended "regular sentences" instead. Matching
+        is containment-based (keyword anywhere in the text, case-
+        insensitive) rather than exact-equality specifically so natural
+        phrases like "yes apply" or "no thanks skip" resolve correctly
+        -- send_job_offer/send_answer_confirmation's own prompts ask for
+        exactly this style of reply now. None of the four keywords is a
+        substring of another, so order never matters here."""
         external_message_id = str(raw_event["message_id"])
         text = (raw_event.get("text") or "").strip()
-        upper = text.upper()
-        if upper in ("APPLY", "SKIP", "CONFIRM", "EDIT"):
-            return NormalizedEvent(channel=self.channel, external_message_id=external_message_id, action=AttentionAction(upper))
+        lower = text.lower()
+        for keyword in ("apply", "skip", "confirm", "edit"):
+            if keyword in lower:
+                return NormalizedEvent(channel=self.channel, external_message_id=external_message_id, action=AttentionAction(keyword.upper()))
         return NormalizedEvent(channel=self.channel, external_message_id=external_message_id, action=AttentionAction.ANSWER, raw_text=text)

@@ -58,6 +58,30 @@ def test_parse_inbound_confirm_and_edit_text_replies():
     assert provider.parse_inbound({"message_id": "m-5", "text": "EDIT"}).action == AttentionAction.EDIT
 
 
+# Live-found 2026-08-24: LoopMessage's own pipeline misclassifies short
+# bare-word replies ("APPLY", "SKIP", ...) as OTP codes and silently
+# drops them before our webhook ever sees them (confirmed by their
+# support). Natural phrases containing the keyword must still resolve
+# correctly -- these are the actual reply style send_job_offer/
+# send_answer_confirmation now ask for.
+def test_parse_inbound_natural_phrase_apply():
+    provider = LoopMessageProvider()
+    event = provider.parse_inbound({"message_id": "m-7", "text": "yes apply"})
+    assert event.action == AttentionAction.APPLY
+
+
+def test_parse_inbound_natural_phrase_skip():
+    provider = LoopMessageProvider()
+    event = provider.parse_inbound({"message_id": "m-8", "text": "no thanks, skip this one"})
+    assert event.action == AttentionAction.SKIP
+
+
+def test_parse_inbound_natural_phrase_confirm_and_edit():
+    provider = LoopMessageProvider()
+    assert provider.parse_inbound({"message_id": "m-9", "text": "yes confirm"}).action == AttentionAction.CONFIRM
+    assert provider.parse_inbound({"message_id": "m-10", "text": "no edit please"}).action == AttentionAction.EDIT
+
+
 def test_parse_inbound_free_text_falls_back_to_answer():
     provider = LoopMessageProvider()
     event = provider.parse_inbound({"message_id": "m-6", "text": "West Haven, CT"})
@@ -80,7 +104,7 @@ def test_send_job_offer_posts_to_loopmessage_api(monkeypatch):
     assert call["headers"]["Authorization"] == "test-key"
     assert call["json"]["contact"] == "+15551234567"
     assert "Java Developer" in call["json"]["text"]
-    assert "Reply:\nAPPLY\nor\nSKIP" in call["json"]["text"]
+    assert 'Reply "yes apply" to apply, or "no skip" to skip' in call["json"]["text"]
     assert "sender" not in call["json"]  # no LOOPMESSAGE_SENDER_NAME configured -- omitted, not sent empty
 
 
