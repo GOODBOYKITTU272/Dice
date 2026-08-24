@@ -249,3 +249,101 @@ def test_main_starts_when_all_mandatory_config_present(monkeypatch, tmp_path):
 
     assert exit_code == 0
     assert calls == ["called"]
+
+
+# ── Phase 7.9: dynamic Browserless session per connect ───────────────────
+
+
+def test_readiness_check_includes_browserless_when_selected(monkeypatch, tmp_path):
+    monkeypatch.setenv("DICEPILOT_BROWSER_PROVIDER", "browserless")
+    monkeypatch.setenv("BROWSERLESS_TOKEN", "test-token")
+    _stub_valid_resume(monkeypatch, tmp_path)
+
+    results = worker_daemon.check_startup_readiness(str(tmp_path / "resume.pdf"))
+
+    assert results["Browserless"] is True
+
+
+def test_readiness_check_fails_when_browserless_selected_but_token_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("DICEPILOT_BROWSER_PROVIDER", "browserless")
+    monkeypatch.delenv("BROWSERLESS_TOKEN", raising=False)
+    _stub_valid_resume(monkeypatch, tmp_path)
+
+    results = worker_daemon.check_startup_readiness(str(tmp_path / "resume.pdf"))
+
+    assert results["Browserless"] is False
+
+
+def test_readiness_check_omits_browserless_key_for_other_providers(monkeypatch, tmp_path):
+    monkeypatch.delenv("DICEPILOT_BROWSER_PROVIDER", raising=False)
+    _stub_valid_resume(monkeypatch, tmp_path)
+
+    results = worker_daemon.check_startup_readiness(str(tmp_path / "resume.pdf"))
+
+    assert "Browserless" not in results
+
+
+def test_connect_for_provider_dispatches_browserless_to_its_own_connect(monkeypatch):
+    calls = []
+    monkeypatch.setattr(worker_daemon, "_connect_browserless", lambda: calls.append("called") or (object(), object()))
+
+    worker_daemon._connect_for_provider("unused-cdp-url", "browserless")
+
+    assert calls == ["called"]
+
+
+def test_connect_browserless_creates_a_fresh_session_and_loads_cookies(monkeypatch):
+    import dice_browser.browserless_session as browserless_session
+
+    calls = {"create_session": 0}
+
+    def fake_create_session():
+        calls["create_session"] += 1
+        return {"connect": "wss://fresh-session-url", "stop": "https://stop-url", "id": "sess-1"}
+
+    fake_cookie = {
+        "name": "identity", "value": "x", "domain": ".dice.com", "path": "/",
+        "secure": True, "httpOnly": False, "sameSite": "lax", "expirationDate": 123,
+    }
+    monkeypatch.setattr(browserless_session, "create_session", fake_create_session)
+    monkeypatch.setattr(browserless_session, "load_dice_cookies", lambda: [fake_cookie])
+
+    added_cookies = []
+
+    class _FakeContext:
+        def add_cookies(self, cookies):
+            added_cookies.append(cookies)
+
+        def new_page(self):
+            return object()
+
+    class _FakeBrowser:
+        contexts = []
+
+        def new_context(self):
+            return _FakeContext()
+
+    connect_calls = []
+
+    class _FakeChromium:
+        def connect_over_cdp(self, url):
+            connect_calls.append(url)
+            return _FakeBrowser()
+
+    class _FakePlaywrightInstance:
+        chromium = _FakeChromium()
+
+        def stop(self):
+            pass
+
+    class _FakeSyncPlaywrightCtx:
+        def start(self):
+            return _FakePlaywrightInstance()
+
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: _FakeSyncPlaywrightCtx())
+
+    playwright, page = worker_daemon._connect_browserless()
+
+    assert calls["create_session"] == 1
+    assert connect_calls == ["wss://fresh-session-url"]
+    assert added_cookies  # cookies were loaded into the fresh session's context

@@ -90,7 +90,13 @@ def check_startup_readiness(resume_path: str | None) -> dict[str, bool]:
     # letting it silently reach a real Easy Apply upload step.
     resume_ok = bool(resume_path) and Path(resume_path).is_file() and Path(resume_path).stat().st_size > 0
     results["resume"] = resume_ok
-    results["browser provider"] = resolve_browser_provider() in VALID_PROVIDERS
+    provider = resolve_browser_provider()
+    results["browser provider"] = provider in VALID_PROVIDERS
+
+    if provider == "browserless":
+        from dice_browser.browserless_session import is_configured as browserless_is_configured
+
+        results["Browserless"] = browserless_is_configured()
 
     return results
 
@@ -113,19 +119,53 @@ def _connect(cdp_url: str):
     return playwright, page
 
 
+def _connect_browserless():
+    """Browserless's own connect path -- deliberately does NOT take a
+    cdp_url at all. Creates a brand-new session on every call (never
+    depends on one static, manually-copied session URL, which is exactly
+    what expired mid-development and needed a human to notice and fix by
+    hand) and loads the candidate's persisted Dice cookies into it before
+    any navigation. A missing/expired Dice cookie set isn't a connect
+    failure here -- open_job()'s own live authenticated-check (already
+    used by every provider) is what correctly turns that into
+    AUTH_REQUIRED, never a crash."""
+    from playwright.sync_api import sync_playwright
+
+    from dice_browser.browserless_session import create_session, load_dice_cookies, to_playwright_cookies
+
+    session = create_session()
+    playwright = sync_playwright().start()
+    try:
+        browser = playwright.chromium.connect_over_cdp(session["connect"])
+        ctx = browser.contexts[0] if browser.contexts else browser.new_context()
+        raw_cookies = load_dice_cookies()
+        if raw_cookies:
+            ctx.add_cookies(to_playwright_cookies(raw_cookies))
+        page = ctx.new_page()
+    except Exception:
+        playwright.stop()
+        raise
+    return playwright, page
+
+
 def _connect_for_provider(cdp_url: str, provider: str):
     """The one place "get me a working browser connection" happens.
     Steel: ensures a live session exists (creating one automatically if
     not -- the viewer is never required for this), then clears any stale
     Chrome Singleton lock artifacts a prior container instance may have
     left on the shared, persistent profile. Local: connects directly --
-    there's nothing to "ensure", the human already has Chrome open."""
+    there's nothing to "ensure", the human already has Chrome open.
+    Browserless: creates its own fresh session every time -- cdp_url is
+    unused for this provider, see _connect_browserless()."""
     if provider == "steel":
         steel_base_url = resolve_steel_base_url(cdp_url)
         ensure_steel_session(steel_base_url)  # raises SteelUnavailableError if the API itself is down
         profile_dir = os.environ.get(BROWSER_PROFILE_DIR_ENV_VAR)
         if profile_dir:
             clean_stale_singleton_locks(profile_dir)
+        return _connect(cdp_url)
+    if provider == "browserless":
+        return _connect_browserless()
     return _connect(cdp_url)
 
 
