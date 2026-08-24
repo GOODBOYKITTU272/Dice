@@ -46,7 +46,7 @@ def test_webhook_accepts_correct_secret_header(monkeypatch):
     resp = _client().post(
         "/webhooks/loopmessage",
         json={"event": "message_inbound", "contact": "+15551234567", "text": "APPLY", "message_id": "m-1"},
-        headers={"X-Loop-Webhook-Secret": "real-secret"},
+        headers={"Authorization": "real-secret"},
     )
 
     assert resp.status_code == 200
