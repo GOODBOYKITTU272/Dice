@@ -22,6 +22,26 @@ from pathlib import Path
 RESUME_BUCKET = "resumes"
 
 
+def resume_exists_in_storage(candidate_id: str) -> bool:
+    """Phase 8A (readiness gate): a cheap existence+size check against
+    Storage metadata only -- never downloads bytes. Used by readiness.py
+    to answer "is there a usable resume" before offering a job, from a
+    process that has no reason to also write a local worker file.
+    Never raises for a missing/unreachable resume -- the caller's own
+    readiness check turns a False into a clear NOT_OFFERABLE reason."""
+    try:
+        from db.supabase_client import get_supabase_client
+
+        client = get_supabase_client()
+        files = client.storage.from_(RESUME_BUCKET).list(candidate_id)
+    except Exception:
+        return False
+    for f in files or []:
+        if f.get("name") == "resume.pdf" and (f.get("metadata") or {}).get("size", 0) > 0:
+            return True
+    return False
+
+
 def ensure_resume_available(candidate_id: str, destination_path: str) -> bool:
     """Downloads the candidate's resume from Supabase Storage to
     `destination_path` if it isn't already there as a real file.

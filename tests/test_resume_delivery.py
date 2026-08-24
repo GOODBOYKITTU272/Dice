@@ -101,3 +101,64 @@ def test_returns_false_when_no_resume_stored_for_candidate(tmp_path, monkeypatch
     result = resume_delivery.ensure_resume_available("candidate-1", str(dest))
 
     assert result is False
+
+
+# Phase 8A: resume_exists_in_storage -- readiness.py's cheap, no-download check.
+def test_resume_exists_in_storage_true_when_real_file_present(monkeypatch):
+    class _FakeBucket:
+        def list(self, path):
+            return [{"name": "resume.pdf", "metadata": {"size": 106538}}]
+
+    class _FakeStorage:
+        def from_(self, bucket):
+            return _FakeBucket()
+
+    class _FakeClient:
+        storage = _FakeStorage()
+
+    monkeypatch.setattr("db.supabase_client.get_supabase_client", lambda: _FakeClient())
+
+    assert resume_delivery.resume_exists_in_storage("candidate-1") is True
+
+
+def test_resume_exists_in_storage_false_when_zero_byte(monkeypatch):
+    class _FakeBucket:
+        def list(self, path):
+            return [{"name": "resume.pdf", "metadata": {"size": 0}}]
+
+    class _FakeStorage:
+        def from_(self, bucket):
+            return _FakeBucket()
+
+    class _FakeClient:
+        storage = _FakeStorage()
+
+    monkeypatch.setattr("db.supabase_client.get_supabase_client", lambda: _FakeClient())
+
+    assert resume_delivery.resume_exists_in_storage("candidate-1") is False
+
+
+def test_resume_exists_in_storage_false_when_no_files(monkeypatch):
+    class _FakeBucket:
+        def list(self, path):
+            return []
+
+    class _FakeStorage:
+        def from_(self, bucket):
+            return _FakeBucket()
+
+    class _FakeClient:
+        storage = _FakeStorage()
+
+    monkeypatch.setattr("db.supabase_client.get_supabase_client", lambda: _FakeClient())
+
+    assert resume_delivery.resume_exists_in_storage("candidate-1") is False
+
+
+def test_resume_exists_in_storage_false_when_storage_unreachable(monkeypatch):
+    def _boom():
+        raise ConnectionError("Supabase unreachable")
+
+    monkeypatch.setattr("db.supabase_client.get_supabase_client", _boom)
+
+    assert resume_delivery.resume_exists_in_storage("candidate-1") is False
