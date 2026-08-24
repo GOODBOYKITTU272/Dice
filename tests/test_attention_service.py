@@ -14,7 +14,7 @@ import uuid
 import pytest
 
 from attention.models import AttentionAction, NormalizedEvent
-from attention.service import UnresolvableEventError, handle_apply, handle_confirm, handle_edit, handle_skip, notify_job_offer, notify_next_missing_question
+from attention.service import UnresolvableEventError, handle_apply, handle_confirm, handle_edit, handle_event, handle_skip, notify_job_offer, notify_next_missing_question
 from db.application_repository import create_job_offer, get_application, update_application_status, upsert_dice_job
 from db.intervention_repository import (
     ApplicationReadiness,
@@ -51,6 +51,22 @@ class _FakeProvider:
 
     def send_submission_failure(self, application, job, reason):
         self.sent.append(("failure", application["id"], reason))
+        return f"msg-{len(self.sent)}"
+
+    def send_apply_ack(self, application_id):
+        self.sent.append(("apply_ack", application_id))
+        return f"msg-{len(self.sent)}"
+
+    def send_skip_ack(self, application_id):
+        self.sent.append(("skip_ack", application_id))
+        return f"msg-{len(self.sent)}"
+
+    def send_answer_accepted(self, application_id, question_id):
+        self.sent.append(("answer_accepted", application_id, question_id))
+        return f"msg-{len(self.sent)}"
+
+    def send_ready_to_submit(self, application_id):
+        self.sent.append(("ready_to_submit", application_id))
         return f"msg-{len(self.sent)}"
 
     def parse_inbound(self, raw_event):
@@ -386,3 +402,150 @@ def test_handle_answer_raises_when_multiple_interventions_are_open_and_none_yet_
 
     with pytest.raises(UnresolvableEventError):
         handle_answer(provider, NormalizedEvent(channel="IMESSAGE", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], raw_text="an answer"))
+
+
+# ── Phase 7.5b: visible Apply/Skip/Confirm acknowledgements ─────────────
+
+
+def test_apply_ack_sent_once_via_handle_event_not_on_duplicate(live_client):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    offer = create_job_offer(candidate_id, job["id"])
+    provider = _FakeProvider()
+
+    handle_event(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.APPLY), candidate_id)
+    handle_event(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.APPLY), candidate_id)
+
+    assert [s for s in provider.sent if s[0] == "apply_ack"] == [("apply_ack", offer["id"])]
+
+
+def test_skip_ack_sent_once_via_handle_event_not_on_duplicate(live_client):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    offer = create_job_offer(candidate_id, job["id"])
+    provider = _FakeProvider()
+
+    handle_event(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.SKIP), candidate_id)
+    handle_event(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.SKIP), candidate_id)
+
+    assert [s for s in provider.sent if s[0] == "skip_ack"] == [("skip_ack", offer["id"])]
+
+
+def test_intermediate_confirm_sends_got_it_before_next_question(live_client):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _needs_input_application(candidate_id, job["id"])
+    update_application_status(application["id"], "NEEDS_INPUT")
+    create_or_get_question_intervention(application_id=application["id"], question_id="q-1", question_prompt="Question 1", field_type="TEXT_INPUT", reason="no trusted candidate mapping")
+    create_or_get_question_intervention(application_id=application["id"], question_id="q-2", question_prompt="Question 2", field_type="TEXT_INPUT", reason="no trusted candidate mapping")
+    provider = _FakeProvider()
+    from attention.service import handle_answer
+
+    notify_next_missing_question(provider, application["id"])  # asks q-1
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="an answer"))
+    handle_confirm(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.CONFIRM, application_id=application["id"], question_id="q-1"))
+
+    kinds = [s[0] for s in provider.sent]
+    assert "answer_accepted" in kinds
+    ack_index = kinds.index("answer_accepted")
+    missing_after_ack = [s for s in provider.sent[ack_index:] if s[0] == "missing_question"]
+    assert missing_after_ack and missing_after_ack[0][2] == "q-2"
+
+
+def _authorized_autonomous_application_with_run(candidate_id: str, job_id: str) -> dict:
+    import run_registry
+
+    application = _needs_input_application(candidate_id, job_id)
+    run_registry.create_run([application["id"]], candidate_id=candidate_id, submission_policy="AUTHORIZED_AUTONOMOUS")
+    update_application_status(application["id"], "NEEDS_INPUT")
+    return get_application(application["id"])
+
+
+def test_final_confirm_authorized_autonomous_sends_ready_to_submit(live_client):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _authorized_autonomous_application_with_run(candidate_id, job["id"])
+    create_or_get_question_intervention(application_id=application["id"], question_id="q-1", question_prompt="Question 1", field_type="TEXT_INPUT", reason="no trusted candidate mapping")
+    provider = _FakeProvider()
+    from attention.service import handle_answer
+
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="an answer"))
+    handle_confirm(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.CONFIRM, application_id=application["id"], question_id="q-1"))
+
+    assert [s for s in provider.sent if s[0] == "ready_to_submit"] == [("ready_to_submit", application["id"])]
+
+
+def test_final_confirm_require_confirmation_does_not_send_ready_to_submit(live_client):
+    import run_registry
+
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _needs_input_application(candidate_id, job["id"])
+    run_registry.create_run([application["id"]], candidate_id=candidate_id, submission_policy="REQUIRE_CONFIRMATION")
+    update_application_status(application["id"], "NEEDS_INPUT")
+    application = get_application(application["id"])
+    create_or_get_question_intervention(application_id=application["id"], question_id="q-1", question_prompt="Question 1", field_type="TEXT_INPUT", reason="no trusted candidate mapping")
+    provider = _FakeProvider()
+    from attention.service import handle_answer
+
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="an answer"))
+    handle_confirm(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.CONFIRM, application_id=application["id"], question_id="q-1"))
+
+    assert [s for s in provider.sent if s[0] == "ready_to_submit"] == []
+
+
+def test_final_confirm_stopped_run_does_not_send_ready_to_submit(live_client):
+    import run_registry
+
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _authorized_autonomous_application_with_run(candidate_id, job["id"])
+    run_registry.update_run_status(application["run_id"], "STOPPED")
+    create_or_get_question_intervention(application_id=application["id"], question_id="q-1", question_prompt="Question 1", field_type="TEXT_INPUT", reason="no trusted candidate mapping")
+    provider = _FakeProvider()
+    from attention.service import handle_answer
+
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="an answer"))
+    handle_confirm(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.CONFIRM, application_id=application["id"], question_id="q-1"))
+
+    assert [s for s in provider.sent if s[0] == "ready_to_submit"] == []
+
+
+# ── Phase 7.5b: repeated-answer-tap duplicate-card guard ────────────────
+
+
+def test_repeated_answer_before_confirm_does_not_resend_confirmation_card(live_client):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _needs_input_application(candidate_id, job["id"])
+    update_application_status(application["id"], "NEEDS_INPUT")
+    create_or_get_question_intervention(application_id=application["id"], question_id="q-1", question_prompt="Are you 18 or older?", field_type="RADIO", reason="no trusted candidate mapping", choices=["Yes", "No"])
+    provider = _FakeProvider()
+    from attention.service import handle_answer
+
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="Yes"))
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="Yes"))
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="No"))
+
+    assert len([s for s in provider.sent if s[0] == "answer_confirmation"]) == 1
+    # Confirm still resolves to whichever was tapped last.
+    handle_confirm(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.CONFIRM, application_id=application["id"], question_id="q-1"))
+    from db.intervention_repository import get_resolved_answers
+
+    assert get_resolved_answers(application["id"])["q-1"] == "No"
+
+
+def test_edit_allows_a_fresh_confirmation_card_for_the_next_answer(live_client):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _needs_input_application(candidate_id, job["id"])
+    update_application_status(application["id"], "NEEDS_INPUT")
+    create_or_get_question_intervention(application_id=application["id"], question_id="q-1", question_prompt="Are you 18 or older?", field_type="RADIO", reason="no trusted candidate mapping", choices=["Yes", "No"])
+    provider = _FakeProvider()
+    from attention.service import handle_answer
+
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="Yes"))
+    handle_edit(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.EDIT, application_id=application["id"], question_id="q-1"))
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="No"))
+
+    assert len([s for s in provider.sent if s[0] == "answer_confirmation"]) == 2

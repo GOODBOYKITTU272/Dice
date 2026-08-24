@@ -23,6 +23,7 @@ import os
 
 import requests
 
+from attention.formatting import job_metadata_line
 from attention.models import AttentionAction, NormalizedEvent
 
 _API_BASE = "https://api.telegram.org"
@@ -76,6 +77,40 @@ class TelegramProvider:
         resp.raise_for_status()
         return resp.json().get("result", [])
 
+    def answer_callback(self, callback_query_id: str) -> None:
+        """Dismisses the tap's loading spinner on the user's button --
+        without this, Telegram leaves the button showing as stuck loading
+        indefinitely, which real live testing showed causes users to tap
+        it repeatedly (each retap is still safely deduped downstream, but
+        the confusion is a real, avoidable UX gap). Never raises -- a
+        failure here must not block the actual event from being
+        processed."""
+        try:
+            requests.post(
+                f"{_API_BASE}/bot{_bot_token()}/answerCallbackQuery",
+                json={"callback_query_id": callback_query_id},
+                timeout=_DEFAULT_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            pass
+
+    def clear_buttons(self, chat_id: str, message_id: str) -> None:
+        """Strips the inline keyboard off an already-handled message so
+        its buttons can never be tapped again -- without this, old Apply/
+        Skip/Confirm/Edit buttons stay live forever and real live testing
+        showed users repeatedly (and confusingly) re-tapping stale
+        messages. Safely deduped downstream regardless, but this removes
+        the confusion at the source. Never raises -- a failure here must
+        not block the actual event from being processed."""
+        try:
+            requests.post(
+                f"{_API_BASE}/bot{_bot_token()}/editMessageReplyMarkup",
+                json={"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}},
+                timeout=_DEFAULT_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            pass
+
     def _send(self, text: str, buttons: list[list[tuple[str, str]]] | None = None) -> str:
         payload: dict = {"chat_id": self._chat_id_override or _chat_id(), "text": text}
         if buttons:
@@ -87,8 +122,22 @@ class TelegramProvider:
         return str(resp.json()["result"]["message_id"])
 
     def send_job_offer(self, application: dict, job: dict) -> str:
-        text = f"Found a match\n\n{job['title']} — {job.get('company_name') or 'Unknown Company'}\nC2C • Easy Apply\n\nApplication check complete."
+        meta = job_metadata_line(job)
+        meta_suffix = f"\n{meta}" if meta else ""
+        text = f"Found a match\n\n{job['title']} — {job.get('company_name') or 'Unknown Company'}{meta_suffix}\n\nWhat would you like to do?"
         return self._send(text, buttons=[[("Apply", "APPLY"), ("Skip", "SKIP")]])
+
+    def send_apply_ack(self, application_id: str) -> str:
+        return self._send("Checking the application...")
+
+    def send_skip_ack(self, application_id: str) -> str:
+        return self._send("Skipped 👍\n\nI won't apply to this job.")
+
+    def send_answer_accepted(self, application_id: str, question_id: str) -> str:
+        return self._send("Got it ✅")
+
+    def send_ready_to_submit(self, application_id: str) -> str:
+        return self._send("✅ I now have everything needed.\n\nSubmitting your application now...")
 
     def send_missing_question(self, application_id: str, question: dict) -> str:
         options = (question.get("options") or {}).get("choices")
@@ -104,7 +153,9 @@ class TelegramProvider:
         return self._send(text, buttons=[[("Confirm", "CONFIRM"), ("Edit", "EDIT")]])
 
     def send_submission_success(self, application: dict, job: dict) -> str:
-        text = f"Applied successfully ✅\n\n{job['title']}\n{job.get('company_name') or ''}".rstrip()
+        meta = job_metadata_line(job)
+        meta_suffix = f"\n{meta}" if meta else ""
+        text = f"Applied successfully ✅\n\n{job['title']}{meta_suffix}\n\nYour application was submitted."
         return self._send(text)
 
     def send_submission_failure(self, application: dict, job: dict, reason: str) -> str:

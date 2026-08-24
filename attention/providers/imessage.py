@@ -25,6 +25,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from attention.formatting import job_metadata_line
 from attention.models import AttentionAction, NormalizedEvent
 
 _CONTACT_ENV_VAR = "IMESSAGE_CONTACT"
@@ -102,11 +103,25 @@ class IMessageProvider:
         return ""
 
     def send_job_offer(self, application: dict, job: dict) -> str:
+        meta = job_metadata_line(job)
+        meta_suffix = f"\n{meta}" if meta else ""
         text = (
-            f"Found a match:\n\n{job['title']} — {job.get('company_name') or 'Unknown Company'}\nC2C • Easy Apply\n\n"
+            f"Found a match:\n\n{job['title']} — {job.get('company_name') or 'Unknown Company'}{meta_suffix}\n\n"
             "Reply:\nAPPLY\nor\nSKIP"
         )
         return self._send(text)
+
+    def send_apply_ack(self, application_id: str) -> str:
+        return self._send("Checking the application...")
+
+    def send_skip_ack(self, application_id: str) -> str:
+        return self._send("Skipped 👍\n\nI won't apply to this job.")
+
+    def send_answer_accepted(self, application_id: str, question_id: str) -> str:
+        return self._send("Got it ✅")
+
+    def send_ready_to_submit(self, application_id: str) -> str:
+        return self._send("✅ I now have everything needed.\n\nSubmitting your application now...")
 
     def send_missing_question(self, application_id: str, question: dict) -> str:
         prompt = question.get("question_text") or "I need one answer before I can continue."
@@ -120,7 +135,9 @@ class IMessageProvider:
         return self._send(text)
 
     def send_submission_success(self, application: dict, job: dict) -> str:
-        text = f"Applied successfully ✅\n\n{job['title']}\n{job.get('company_name') or ''}".rstrip()
+        meta = job_metadata_line(job)
+        meta_suffix = f"\n{meta}" if meta else ""
+        text = f"Applied successfully ✅\n\n{job['title']}{meta_suffix}\n\nYour application was submitted."
         return self._send(text)
 
     def send_submission_failure(self, application: dict, job: dict, reason: str) -> str:

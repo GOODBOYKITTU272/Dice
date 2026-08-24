@@ -13,7 +13,10 @@ from db.supabase_client import get_supabase_client
 # unique index (attention_events_outbound_once_idx). MISSING_QUESTION and
 # ANSWER_CONFIRMATION are deliberately excluded: they legitimately repeat
 # across different questions on the same application.
-_OUTBOUND_ONCE_TYPES = {"JOB_OFFER", "SUBMISSION_SUCCESS", "SUBMISSION_FAILURE"}
+_OUTBOUND_ONCE_TYPES = {
+    "JOB_OFFER", "SUBMISSION_SUCCESS", "SUBMISSION_FAILURE",
+    "APPLY_ACK", "SKIP_ACK", "READY_TO_SUBMIT",
+}
 
 
 def already_sent_outbound(application_id: str, channel: str, message_type: str) -> bool:
@@ -126,6 +129,41 @@ def latest_inbound_answer(application_id: str, question_id: str) -> Any | None:
         return None
     matching.sort(key=lambda r: r.get("created_at") or "")
     return matching[-1]["payload"].get("raw_answer")
+
+
+def _latest_event_at(application_id: str, question_id: str, direction: str, message_type: str) -> str | None:
+    client = get_supabase_client()
+    rows = (
+        client.table("attention_events")
+        .select("payload, created_at")
+        .eq("application_id", application_id)
+        .eq("direction", direction)
+        .eq("message_type", message_type)
+        .execute()
+        .data
+        or []
+    )
+    matching = [r for r in rows if (r.get("payload") or {}).get("question_id") == question_id]
+    if not matching:
+        return None
+    matching.sort(key=lambda r: r.get("created_at") or "")
+    return matching[-1]["created_at"]
+
+
+def has_active_answer_confirmation(application_id: str, question_id: str) -> bool:
+    """True when a "You answered... [Confirm][Edit]" card is already on
+    screen and unresolved for this question -- i.e. sent more recently
+    than the question was last (re)asked. A repeat ANSWER tap on the same
+    still-open question must not send a second card while one is already
+    active. EDIT resets this naturally: it re-sends MISSING_QUESTION,
+    which makes the next ANSWER produce a fresh card again."""
+    asked_at = _latest_event_at(application_id, question_id, "OUTBOUND", "MISSING_QUESTION")
+    confirmed_at = _latest_event_at(application_id, question_id, "OUTBOUND", "ANSWER_CONFIRMATION")
+    if confirmed_at is None:
+        return False
+    if asked_at is None:
+        return True
+    return confirmed_at > asked_at
 
 
 def latest_active_question_id(application_id: str) -> str | None:

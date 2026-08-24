@@ -67,6 +67,36 @@ def test_send_job_offer_invokes_osascript_with_configured_contact(monkeypatch):
     assert "+15551234567" in script
     assert "Java Developer" in script
     assert "Reply:\\nAPPLY\\nor\\nSKIP" in script or "Reply:\nAPPLY\nor\nSKIP" in script
+    assert "C2C" not in script  # not hardcoded -- this test job has no metadata
+
+
+def test_send_job_offer_includes_metadata_line_when_job_confirms_it(monkeypatch):
+    calls = []
+    monkeypatch.setenv("IMESSAGE_CONTACT", "+15551234567")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append((a, kw)))
+
+    provider = IMessageProvider()
+    provider.send_job_offer({"id": "app-1"}, {"title": "Java Developer", "company_name": "ABC Corp", "c2c_status": "LIKELY", "is_easy_apply": True})
+
+    assert "C2C • Easy Apply" in calls[0][0][0][2]
+
+
+def test_send_apply_ack_and_skip_ack_and_answer_accepted_and_ready_to_submit(monkeypatch):
+    calls = []
+    monkeypatch.setenv("IMESSAGE_CONTACT", "+15551234567")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append((a, kw)))
+
+    provider = IMessageProvider()
+    provider.send_apply_ack("app-1")
+    provider.send_skip_ack("app-1")
+    provider.send_answer_accepted("app-1", "q-1")
+    provider.send_ready_to_submit("app-1")
+
+    scripts = [c[0][0][2] for c in calls]
+    assert "Checking" in scripts[0]
+    assert "Skipped" in scripts[1]
+    assert "Got it" in scripts[2]
+    assert "Submitting" in scripts[3]
 
 
 def test_send_missing_question_lists_choices_as_reply_hint(monkeypatch):

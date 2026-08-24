@@ -66,6 +66,21 @@ def process_telegram_update(provider: TelegramProvider, raw_update: dict) -> str
     if chat_id is None:
         return "ignored_no_op"
 
+    callback = raw_update.get("callback_query")
+    if callback is not None and callback.get("id"):
+        # Dismiss the tap's loading spinner immediately, regardless of
+        # how this update is ultimately classified below -- an unknown
+        # sender or a stale/duplicate tap deserves the same clear "this
+        # was received" feedback as a normal one.
+        provider.answer_callback(callback["id"])
+        # Strip the message's buttons too, unconditionally -- real live
+        # testing showed old Apply/Skip/Confirm/Edit buttons staying
+        # tappable forever otherwise, which is exactly what caused
+        # repeated confusing mis-taps on stale messages tonight.
+        message_id = (callback.get("message") or {}).get("message_id")
+        if message_id is not None:
+            provider.clear_buttons(chat_id, str(message_id))
+
     text = (raw_update.get("message") or {}).get("text")
     linked_candidate_id = _try_consume_as_link_code("TELEGRAM", text, chat_id) if text else None
     if linked_candidate_id is not None:
@@ -78,9 +93,17 @@ def process_telegram_update(provider: TelegramProvider, raw_update: dict) -> str
     if already_processed_inbound("TELEGRAM", external_message_id):
         return "duplicate"
 
+    # handle_event may need to SEND a reply (e.g. an answer confirmation
+    # prompt) -- the `provider` argument passed into poll_telegram_once
+    # is only guaranteed configured for polling (getUpdates), which
+    # needs no chat_id. Real live finding: sending with that bare
+    # provider silently fell back to the unset TELEGRAM_CHAT_ID env var
+    # and raised. A provider bound to the chat_id just resolved above
+    # (the sender we're actually replying to) is what must be used here.
     event = provider.parse_inbound(raw_update)
+    bound_provider = TelegramProvider(chat_id=chat_id)
     try:
-        handle_event(provider, event, candidate_id)
+        handle_event(bound_provider, event, candidate_id)
     except UnresolvableEventError:
         return "ignored_stale"
     return "processed"
@@ -108,8 +131,9 @@ def process_imessage_row(provider: IMessageProvider, contact: str, row: dict) ->
         return "duplicate"
 
     event = provider.parse_inbound(row)
+    bound_provider = IMessageProvider(contact=contact)
     try:
-        handle_event(provider, event, candidate_id)
+        handle_event(bound_provider, event, candidate_id)
     except UnresolvableEventError:
         return "ignored_stale"
     return "processed"

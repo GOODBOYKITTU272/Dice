@@ -8,9 +8,11 @@ cover in isolation).
 """
 from __future__ import annotations
 
+import subprocess
 import uuid
 
 import pytest
+import requests
 
 import attention.consumer as consumer
 from attention.channels import bind_channel, create_link_code, resolve_candidate_for_identity
@@ -22,6 +24,29 @@ from db.supabase_client import get_supabase_client
 _created_job_ids: list[str] = []
 _created_channel_rows: list[str] = []
 _created_codes: list[str] = []
+
+
+class _FakeTelegramResponse:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"ok": True, "result": {"message_id": 1}}
+
+
+@pytest.fixture(autouse=True)
+def _no_real_transports(monkeypatch):
+    """Blanket safety net for every test in this file: consumer.py builds
+    a REAL, chat_id/contact-bound provider around whatever inbound sender
+    it resolves (see process_telegram_update/process_imessage_row) --
+    including for the fake identities these tests use -- so any code path
+    that ends up SENDING something (Apply/Skip acks, answer confirmations,
+    etc.) must never be allowed to reach a real osascript/Messages.app
+    call or a real Telegram API call. Real finding: without this, a fake
+    test contact like "+15554407359" got a real (failed) iMessage send
+    attempt once Apply/Skip started sending acknowledgements."""
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: None)
+    monkeypatch.setattr(requests, "post", lambda *a, **kw: _FakeTelegramResponse())
 
 
 def _make_test_job():
@@ -93,6 +118,22 @@ def test_telegram_unknown_sender_is_ignored():
     provider = TelegramProvider()
     result = consumer.process_telegram_update(provider, {"update_id": 3, "callback_query": {"data": "APPLY", "message": {"chat": {"id": 999999}}}})
     assert result == "ignored_unknown_sender"
+
+
+def test_telegram_callback_clears_buttons_on_the_original_message(monkeypatch):
+    candidate_id = str(uuid.uuid4())
+    chat_id = _new_chat_id()
+    row = bind_channel(candidate_id, "TELEGRAM", chat_id, verified=True)
+    _created_channel_rows.append(row["id"])
+    job = _make_test_job()
+    create_job_offer(candidate_id, job["id"])
+    provider = TelegramProvider()
+    cleared = []
+    monkeypatch.setattr(TelegramProvider, "clear_buttons", lambda self, chat_id, message_id: cleared.append((chat_id, message_id)))
+
+    consumer.process_telegram_update(provider, {"update_id": 50, "callback_query": {"id": "cb-1", "data": "APPLY", "message": {"message_id": 777, "chat": {"id": int(chat_id)}}}})
+
+    assert cleared == [(chat_id, "777")]
 
 
 # 5 & 6. Telegram job offer goes to mapped candidate / Apply maps correctly
@@ -176,13 +217,22 @@ def test_poll_telegram_once_uses_offset_derived_from_attention_events(monkeypatc
     job = _make_test_job()
     offer = create_job_offer(candidate_id, job["id"])
 
+    # The offset is derived from the real MAX(external_message_id) already
+    # recorded for TELEGRAM in this (shared) Supabase project -- a fixed
+    # low fake update_id would break the moment any other TELEGRAM
+    # activity (including real live bot use) has ever been recorded.
+    # Picking one safely above whatever's already there, and having the
+    # fake mimic real getUpdates semantics (only return ids >= offset),
+    # keeps this test correct regardless of that real, ever-growing state.
+    fake_update_id = (consumer._last_seen_external_id("TELEGRAM") or 0) + 1000
+
     provider = TelegramProvider()
     captured_offsets = []
 
     def fake_fetch_updates(offset=None, timeout=0):
         captured_offsets.append(offset)
-        if offset is None:
-            return [{"update_id": 100, "callback_query": {"data": "SKIP", "message": {"chat": {"id": int(chat_id)}}}}]
+        if offset is None or offset <= fake_update_id:
+            return [{"update_id": fake_update_id, "callback_query": {"data": "SKIP", "message": {"chat": {"id": int(chat_id)}}}}]
         return []
 
     monkeypatch.setattr(provider, "fetch_updates", fake_fetch_updates)
@@ -191,7 +241,11 @@ def test_poll_telegram_once_uses_offset_derived_from_attention_events(monkeypatc
     second_results = consumer.poll_telegram_once(provider)
 
     assert first_results == ["processed"]
-    assert captured_offsets == [None, 101]  # second poll starts right after update_id 100
+    # What's actually under test: the second poll's offset picks up right
+    # after the update_id just processed -- not any particular value for
+    # the first poll's offset, which depends on however much real
+    # TELEGRAM history already exists in this shared project.
+    assert captured_offsets[1] == fake_update_id + 1
     assert second_results == []
 
 

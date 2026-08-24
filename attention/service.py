@@ -16,6 +16,7 @@ import run_registry
 from attention.events import (
     already_processed_inbound,
     already_sent_outbound,
+    has_active_answer_confirmation,
     latest_active_question_id,
     latest_inbound_answer,
     record_inbound,
@@ -102,27 +103,33 @@ def notify_submission_failure(provider: AttentionProvider, application_id: str, 
 # ── inbound ─────────────────────────────────────────────────────────────
 
 
-def handle_apply(application_id: str) -> None:
+def handle_apply(application_id: str) -> bool:
     """Apply is authorization to complete and submit -- nothing more.
     Idempotent by construction: a second Apply finds the application no
     longer AWAITING_USER_DECISION and no-ops. Never opens a browser here
     -- QUEUED is the exact same status/claim mechanism the existing Jobs-
     selection UI's "Start Applications" button already uses; the worker
-    daemon picks this run up on its own next poll."""
+    daemon picks this run up on its own next poll. Returns True only when
+    this call actually changed state -- handle_event uses that to decide
+    whether to send the (send-once) Apply acknowledgement, never on a
+    duplicate/replayed Apply."""
     application = get_application(application_id)
     if application["status"] != "AWAITING_USER_DECISION":
-        return
+        return False
     update_application_status(application_id, "QUEUED")
     run_registry.create_run([application_id], candidate_id=application["candidate_id"], submission_policy="AUTHORIZED_AUTONOMOUS")
+    return True
 
 
-def handle_skip(application_id: str) -> None:
+def handle_skip(application_id: str) -> bool:
     """Idempotent: a second Skip finds the application already SKIPPED
-    (or past that point) and no-ops."""
+    (or past that point) and no-ops. Returns True only when this call
+    actually changed state -- see handle_apply."""
     application = get_application(application_id)
     if application["status"] != "AWAITING_USER_DECISION":
-        return
+        return False
     update_application_status(application_id, "SKIPPED")
+    return True
 
 
 def handle_answer(provider: AttentionProvider, event: NormalizedEvent, candidate_id: str | None = None) -> None:
@@ -150,6 +157,15 @@ def handle_answer(provider: AttentionProvider, event: NormalizedEvent, candidate
         event.external_message_id,
         payload={"question_id": question_id, "raw_answer": event.raw_text},
     )
+    if has_active_answer_confirmation(application_id, question_id):
+        # A "You answered... [Confirm][Edit]" card is already on screen
+        # and unresolved for this question -- a repeat tap (Yes again, or
+        # even a changed answer before Confirm/Edit) still gets recorded
+        # above (so Confirm uses whichever was tapped last), but must not
+        # spam a second card. Real live finding: without this, retapping
+        # the same answer button produced a new "You answered" card every
+        # single time.
+        return
     external_id = provider.send_answer_confirmation(application_id, question_id, event.raw_text)
     record_outbound(
         application_id,
@@ -198,8 +214,16 @@ def handle_confirm(provider: AttentionProvider, event: NormalizedEvent, candidat
     )
 
     if compute_application_readiness(application_id) != ApplicationReadiness.RESUMABLE:
+        _send_answer_accepted_ack(provider, application, question_id)
         notify_next_missing_question(provider, application_id)
-    # else: fully resolved -- worker daemon resumes it on its own poll.
+    else:
+        # Fully resolved -- worker daemon resumes it on its own poll,
+        # never this handler. The visible "ready to submit" ack is purely
+        # informational and only makes sense for AUTHORIZED_AUTONOMOUS
+        # (where resumption really is about to happen automatically);
+        # REQUIRE_CONFIRMATION must never claim submission is starting,
+        # and a STOPPED run must never claim it'll resume at all.
+        _send_ready_to_submit_ack(provider, application)
 
 
 def handle_edit(provider: AttentionProvider, event: NormalizedEvent, candidate_id: str | None = None) -> None:
@@ -259,17 +283,54 @@ def handle_event(provider: AttentionProvider, event: NormalizedEvent, candidate_
     if event.action == AttentionAction.APPLY:
         application_id = event.application_id or _resolve_offer_application_id(candidate_id)
         _record_offer_decision_inbound(event, application_id, AttentionAction.APPLY)
-        handle_apply(application_id)
+        if handle_apply(application_id):
+            _send_once(provider, application_id, MessageType.APPLY_ACK, provider.send_apply_ack)
     elif event.action == AttentionAction.SKIP:
         application_id = event.application_id or _resolve_offer_application_id(candidate_id)
         _record_offer_decision_inbound(event, application_id, AttentionAction.SKIP)
-        handle_skip(application_id)
+        if handle_skip(application_id):
+            _send_once(provider, application_id, MessageType.SKIP_ACK, provider.send_skip_ack)
     elif event.action == AttentionAction.ANSWER:
         handle_answer(provider, event, candidate_id)
     elif event.action == AttentionAction.CONFIRM:
         handle_confirm(provider, event, candidate_id)
     elif event.action == AttentionAction.EDIT:
         handle_edit(provider, event, candidate_id)
+
+
+def _send_once(provider: AttentionProvider, application_id: str, message_type: MessageType, send_fn) -> None:
+    """For the send-once acks (APPLY_ACK/SKIP_ACK/READY_TO_SUBMIT) --
+    already_sent_outbound + the DB's own partial unique index are the
+    belt-and-suspenders backstop; the actual "only once" guarantee comes
+    from the caller only invoking this when the underlying state
+    transition really happened (handle_apply/handle_skip's bool return,
+    handle_confirm's own OPEN-intervention check) -- live-verified today
+    under 12x duplicate Apply and 5x duplicate Confirm deliveries."""
+    if already_sent_outbound(application_id, provider.channel, message_type.value):
+        return
+    application = get_application(application_id)
+    external_id = send_fn(application_id)
+    record_outbound(application_id, application["candidate_id"], provider.channel, message_type.value, external_id)
+
+
+def _send_answer_accepted_ack(provider: AttentionProvider, application: dict, question_id: str) -> None:
+    external_id = provider.send_answer_accepted(application["id"], question_id)
+    record_outbound(
+        application["id"], application["candidate_id"], provider.channel,
+        MessageType.ANSWER_ACCEPTED.value, external_id, payload={"question_id": question_id},
+    )
+
+
+def _send_ready_to_submit_ack(provider: AttentionProvider, application: dict) -> None:
+    run_id = application.get("run_id")
+    if not run_id:
+        return
+    run = run_registry.get_run(run_id)
+    if run["status"] == "STOPPED":
+        return
+    if run["submission_policy"] != "AUTHORIZED_AUTONOMOUS":
+        return  # REQUIRE_CONFIRMATION must never claim submission is starting
+    _send_once(provider, application["id"], MessageType.READY_TO_SUBMIT, lambda application_id: provider.send_ready_to_submit(application_id))
 
 
 def _record_offer_decision_inbound(event: NormalizedEvent, application_id: str, action: AttentionAction) -> None:

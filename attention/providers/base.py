@@ -32,6 +32,27 @@ class AttentionProvider(Protocol):
     def send_submission_failure(self, application: dict, job: dict, reason: str) -> str:
         ...
 
+    def send_apply_ack(self, application_id: str) -> str:
+        """Sent once, only after Apply actually changed application
+        state (never on a duplicate/replayed Apply)."""
+        ...
+
+    def send_skip_ack(self, application_id: str) -> str:
+        """Sent once, only after Skip actually changed application
+        state (never on a duplicate/replayed Skip)."""
+        ...
+
+    def send_answer_accepted(self, application_id: str, question_id: str) -> str:
+        """"Got it" -- sent after a Confirm that resolves a question but
+        leaves more open ones. Legitimately repeats once per confirmed
+        question on the same application (like MISSING_QUESTION)."""
+        ...
+
+    def send_ready_to_submit(self, application_id: str) -> str:
+        """Sent once, only when the final open question is confirmed AND
+        the associated run's policy is AUTHORIZED_AUTONOMOUS."""
+        ...
+
     def parse_inbound(self, raw_event: dict) -> NormalizedEvent:
         """Translates one provider-native inbound event (a Telegram
         update, an iMessage row) into a NormalizedEvent. Never touches
