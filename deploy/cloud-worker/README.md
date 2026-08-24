@@ -90,6 +90,7 @@ Required for the worker:
 | `DICEPILOT_BROWSER_PROFILE_DIR` | `/data/steel/chrome-profile` (Steel) or `/opt/dicepilot/browser-profile` (local Chrome) — see step 6 |
 | `DICEPILOT_BROWSER_PROVIDER` | `steel` (preferred) or `local` — selects which of the two below is active, and whether the worker runs Steel's stale-lock cleanup at startup |
 | `DICEPILOT_SUBMISSION_MODE` | Leave unset (defaults to `AUTHORIZED_AUTONOMOUS`, the intended normal mode) unless you specifically want new runs to default to manual confirmation |
+| `DICEPILOT_RESUME_PATH` | Absolute path to the candidate's resume file on this VM (e.g. `/opt/dicepilot/dice/.runtime/resume/test_resume.pdf`). **Mandatory** -- the worker refuses to start without it (see step 9's readiness check) |
 
 ## 5. Configure the persistent browser profile disk
 
@@ -219,6 +220,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now dicepilot-worker
 sudo systemctl status dicepilot-worker
 ```
+
+The worker checks its own configuration before doing anything else and
+refuses to start if anything mandatory is missing (Supabase reachable,
+`DICEPILOT_CANDIDATE_ID` set, `DICEPILOT_RESUME_PATH` set and the file
+actually exists, a recognized browser provider) -- `journalctl -u
+dicepilot-worker -n 30` shows a PASS/FAIL line per check if it exits
+immediately after starting.
 
 No `--submission-policy` flag — the worker reads each run's own
 persisted policy (Phase 6.4). Adding one here would override *every* run

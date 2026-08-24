@@ -360,6 +360,7 @@ def process_one_application(
 
     application_id = application["id"]
     dice_job_id = application["dice_job_id"]
+    add_event(application_id, event_type="worker_claimed", step="CLAIM", message=worker_id)
 
     try:
         dice_job = get_dice_job(dice_job_id)
@@ -385,6 +386,7 @@ def process_one_application(
     if not nav_result.easy_apply_visible:
         _fail(application_id, "FAILED", "STALE_INELIGIBLE", "Easy Apply is no longer available for this job")
         return ApplicationRunResult(application_id, dice_job_id, StopReason.STALE_OR_INELIGIBLE, "Easy Apply no longer available")
+    add_event(application_id, event_type="job_opened", step="OPEN_JOB", message=canonical_url)
 
     open_result = open_easy_apply(page, nav_result)
     if not open_result.opened:

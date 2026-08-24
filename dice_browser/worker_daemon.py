@@ -36,8 +36,9 @@ import argparse
 import os
 import time
 import uuid
+from pathlib import Path
 
-from dice_browser.browser_provider import resolve_browser_provider
+from dice_browser.browser_provider import VALID_PROVIDERS, resolve_browser_provider
 from dice_browser.session import BROWSER_PROFILE_DIR_ENV_VAR, clean_stale_singleton_locks
 from dice_browser.steel_session import SteelUnavailableError, ensure_steel_session, resolve_steel_base_url
 
@@ -50,7 +51,41 @@ DEFAULT_MAX_RECOVERY_ATTEMPTS = 3
 DEFAULT_RECOVERY_BACKOFF_SECONDS = 5
 CDP_URL_ENV_VAR = "DICEPILOT_CDP_URL"
 DEFAULT_CDP_URL = "http://127.0.0.1:9333"
+RESUME_PATH_ENV_VAR = "DICEPILOT_RESUME_PATH"
 _DICE_HOME_URL = "https://www.dice.com/home-feed"
+
+
+def resolve_resume_path(cli_resume_path: str | None) -> str | None:
+    """CLI flag wins when given (a deliberate debug override); otherwise
+    falls back to the env var, which is what the deployed systemd service
+    actually configures -- ExecStart passes no CLI flags at all (see
+    deploy/cloud-worker/dicepilot-worker.service), so before this the
+    resume was always None in production, a live-verified real gap."""
+    return cli_resume_path or os.environ.get(RESUME_PATH_ENV_VAR)
+
+
+def check_startup_readiness(resume_path: str | None) -> dict[str, bool]:
+    """Fail loudly at startup rather than silently claiming real work
+    with missing mandatory configuration -- real live finding: a worker
+    started without a resume configured only discovered that hours later,
+    mid-application, instead of at the moment it would have been obvious.
+    Returns {check_name: passed} for every check; callers decide what to
+    do with a failure (main() exits non-zero on any mandatory failure)."""
+    results: dict[str, bool] = {}
+
+    try:
+        from db.supabase_client import get_supabase_client
+
+        get_supabase_client().table("applications").select("id").limit(1).execute()
+        results["Supabase"] = True
+    except Exception:
+        results["Supabase"] = False
+
+    results["candidate"] = bool(os.environ.get("DICEPILOT_CANDIDATE_ID"))
+    results["resume"] = bool(resume_path) and Path(resume_path).is_file()
+    results["browser provider"] = resolve_browser_provider() in VALID_PROVIDERS
+
+    return results
 
 
 def default_cdp_url() -> str:
@@ -365,8 +400,17 @@ def main(argv: list[str] | None = None) -> int:
     args = _build_arg_parser().parse_args(argv)
     worker_id = f"worker-{uuid.uuid4()}"
     cdp_url = args.cdp_url or default_cdp_url()
+    resume_path = resolve_resume_path(args.resume_path)
     override = SubmissionPolicy(args.submission_policy) if args.submission_policy else None
     provider = resolve_browser_provider()
+
+    print("Checking startup configuration...")
+    readiness = check_startup_readiness(resume_path)
+    for name, passed in readiness.items():
+        print(f"  {name:<20} {'PASS' if passed else 'FAIL'}")
+    if not all(readiness.values()):
+        print("Refusing to start: mandatory configuration is missing (see FAIL above). Fix it and restart.")
+        return 1
 
     print("Reconciling any state left behind by a previous crashed worker...")
     app_recovery = run_registry.recover_stale_applications()
@@ -397,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
     run_daemon(
         worker_id,
         cdp_url=cdp_url,
-        resume_path=args.resume_path,
+        resume_path=resume_path,
         submission_policy_override=override,
         poll_interval=args.poll_interval,
         auth_check_interval=args.auth_check_interval,
