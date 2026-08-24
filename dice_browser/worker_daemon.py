@@ -82,7 +82,14 @@ def check_startup_readiness(resume_path: str | None) -> dict[str, bool]:
         results["Supabase"] = False
 
     results["candidate"] = bool(os.environ.get("DICEPILOT_CANDIDATE_ID"))
-    results["resume"] = bool(resume_path) and Path(resume_path).is_file()
+    # Real live finding: a startup command that `touch`es an empty file
+    # at the configured path passed this check when it only verified
+    # existence -- a 0-byte file is not a usable resume. Requiring some
+    # real content (well under any genuine resume's size, so this never
+    # false-rejects a real one) catches that immediately instead of
+    # letting it silently reach a real Easy Apply upload step.
+    resume_ok = bool(resume_path) and Path(resume_path).is_file() and Path(resume_path).stat().st_size > 0
+    results["resume"] = resume_ok
     results["browser provider"] = resolve_browser_provider() in VALID_PROVIDERS
 
     return results

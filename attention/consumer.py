@@ -73,6 +73,10 @@ def process_telegram_update(provider: TelegramProvider, raw_update: dict) -> str
         # sender or a stale/duplicate tap deserves the same clear "this
         # was received" feedback as a normal one.
         provider.answer_callback(callback["id"])
+        # Real visible "something is happening" feedback for the couple
+        # of seconds before the actual ack/reply message arrives --
+        # Telegram's native typing animation, not a fabricated status.
+        provider.send_typing_indicator(chat_id)
         # Strip the message's buttons too, unconditionally -- real live
         # testing showed old Apply/Skip/Confirm/Edit buttons staying
         # tappable forever otherwise, which is exactly what caused

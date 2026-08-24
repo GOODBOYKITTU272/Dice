@@ -94,6 +94,21 @@ class TelegramProvider:
         except Exception:
             pass
 
+    def send_typing_indicator(self, chat_id: str) -> None:
+        """Shows Telegram's native "..." typing animation for a few
+        seconds -- real visible feedback the instant a tap is received,
+        before the actual "Checking the application..." text message
+        arrives a couple seconds later. Never raises -- a failure here
+        must not block the actual event from being processed."""
+        try:
+            requests.post(
+                f"{_API_BASE}/bot{_bot_token()}/sendChatAction",
+                json={"chat_id": chat_id, "action": "typing"},
+                timeout=_DEFAULT_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            pass
+
     def clear_buttons(self, chat_id: str, message_id: str) -> None:
         """Strips the inline keyboard off an already-handled message so
         its buttons can never be tapped again -- without this, old Apply/

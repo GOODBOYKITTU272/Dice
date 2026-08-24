@@ -199,3 +199,26 @@ def test_clear_buttons_never_raises_on_failure(monkeypatch):
 
     monkeypatch.setattr(requests, "post", _boom)
     TelegramProvider().clear_buttons("12345", "999")  # must not raise
+
+
+def test_send_typing_indicator_sends_the_typing_action(monkeypatch):
+    calls = []
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(requests, "post", _capture_post(calls))
+
+    TelegramProvider().send_typing_indicator("12345")
+
+    assert len(calls) == 1
+    url, payload = calls[0]
+    assert "sendChatAction" in url
+    assert payload == {"chat_id": "12345", "action": "typing"}
+
+
+def test_send_typing_indicator_never_raises_on_failure(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+
+    def _boom(*a, **kw):
+        raise ConnectionError("network down")
+
+    monkeypatch.setattr(requests, "post", _boom)
+    TelegramProvider().send_typing_indicator("12345")  # must not raise

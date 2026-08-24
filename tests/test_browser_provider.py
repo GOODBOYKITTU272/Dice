@@ -204,6 +204,17 @@ def test_readiness_check_fails_when_resume_file_does_not_exist(tmp_path):
     assert results["resume"] is False
 
 
+# Real live finding: a startup command that ran `touch resume.pdf`
+# (creating an empty, 0-byte file) passed the old existence-only check.
+def test_readiness_check_fails_when_resume_file_is_empty(tmp_path):
+    empty_resume = tmp_path / "resume.pdf"
+    empty_resume.touch()
+
+    results = worker_daemon.check_startup_readiness(str(empty_resume))
+
+    assert results["resume"] is False
+
+
 def test_readiness_check_fails_when_candidate_id_missing(monkeypatch, tmp_path):
     monkeypatch.delenv("DICEPILOT_CANDIDATE_ID", raising=False)
     resume = tmp_path / "resume.pdf"

@@ -136,6 +136,22 @@ def test_telegram_callback_clears_buttons_on_the_original_message(monkeypatch):
     assert cleared == [(chat_id, "777")]
 
 
+def test_telegram_callback_sends_typing_indicator_immediately(monkeypatch):
+    candidate_id = str(uuid.uuid4())
+    chat_id = _new_chat_id()
+    row = bind_channel(candidate_id, "TELEGRAM", chat_id, verified=True)
+    _created_channel_rows.append(row["id"])
+    job = _make_test_job()
+    create_job_offer(candidate_id, job["id"])
+    provider = TelegramProvider()
+    typed = []
+    monkeypatch.setattr(TelegramProvider, "send_typing_indicator", lambda self, chat_id: typed.append(chat_id))
+
+    consumer.process_telegram_update(provider, {"update_id": 51, "callback_query": {"id": "cb-2", "data": "APPLY", "message": {"message_id": 778, "chat": {"id": int(chat_id)}}}})
+
+    assert typed == [chat_id]
+
+
 # 5 & 6. Telegram job offer goes to mapped candidate / Apply maps correctly
 def test_telegram_apply_from_bound_sender_is_processed():
     candidate_id = str(uuid.uuid4())
