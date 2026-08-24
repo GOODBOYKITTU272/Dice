@@ -347,3 +347,50 @@ def test_connect_browserless_creates_a_fresh_session_and_loads_cookies(monkeypat
     assert calls["create_session"] == 1
     assert connect_calls == ["wss://fresh-session-url"]
     assert added_cookies  # cookies were loaded into the fresh session's context
+
+
+# ── Phase 7.10: automatic resume delivery wired into main() ──────────────
+
+
+def test_main_downloads_resume_automatically_when_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", "test-candidate")
+    resume_path = str(tmp_path / "resume.pdf")
+    monkeypatch.setenv("DICEPILOT_RESUME_PATH", resume_path)
+
+    import dice_browser.resume_delivery as resume_delivery
+
+    calls = []
+
+    def fake_ensure(candidate_id, destination_path):
+        calls.append((candidate_id, destination_path))
+        tmp_path.mkdir(parents=True, exist_ok=True)
+        (tmp_path / "resume.pdf").write_bytes(b"%PDF-1.4 real")
+        return True
+
+    monkeypatch.setattr(resume_delivery, "ensure_resume_available", fake_ensure)
+    monkeypatch.setattr(worker_daemon, "run_daemon", lambda *a, **kw: None)
+    import run_registry
+
+    monkeypatch.setattr(run_registry, "recover_stale_applications", lambda: {"requeued": [], "needs_verification": []})
+    monkeypatch.setattr(run_registry, "recover_orphaned_runs", lambda: [])
+
+    exit_code = worker_daemon.main([])
+
+    assert calls == [("test-candidate", resume_path)]
+    assert exit_code == 0
+
+
+def test_main_reports_startup_failure_when_resume_download_fails(monkeypatch, tmp_path):
+    monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", "test-candidate")
+    monkeypatch.setenv("DICEPILOT_RESUME_PATH", str(tmp_path / "resume.pdf"))
+
+    import dice_browser.resume_delivery as resume_delivery
+
+    monkeypatch.setattr(resume_delivery, "ensure_resume_available", lambda candidate_id, destination_path: False)
+    calls = []
+    monkeypatch.setattr(worker_daemon, "run_daemon", lambda *a, **kw: calls.append("called"))
+
+    exit_code = worker_daemon.main([])
+
+    assert exit_code == 1
+    assert calls == []  # never reached run_daemon -- readiness check correctly caught the missing resume

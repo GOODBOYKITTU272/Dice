@@ -451,6 +451,16 @@ def main(argv: list[str] | None = None) -> int:
     override = SubmissionPolicy(args.submission_policy) if args.submission_policy else None
     provider = resolve_browser_provider()
 
+    candidate_id = os.environ.get("DICEPILOT_CANDIDATE_ID")
+    if candidate_id and resume_path:
+        from dice_browser.resume_delivery import ensure_resume_available
+
+        print("Ensuring the candidate's resume is available locally...")
+        if ensure_resume_available(candidate_id, resume_path):
+            print("  resume ready.")
+        else:
+            print("  could not fetch a resume from storage -- readiness check below will report this.")
+
     print("Checking startup configuration...")
     readiness = check_startup_readiness(resume_path)
     for name, passed in readiness.items():
