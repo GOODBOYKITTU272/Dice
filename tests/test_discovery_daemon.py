@@ -59,13 +59,20 @@ def _discovery_row(job: dict, qualified: bool = True) -> dict:
 class _FakeProvider:
     channel = "TELEGRAM"
 
+    def __init__(self):
+        self.sent: list[tuple] = []
+
+    def send_job_offer(self, application, job):
+        self.sent.append(("job_offer", application["id"]))
+        return f"msg-{len(self.sent)}"
+
 
 # ── 1. daemon starts / 3. interval configurable ──────────────────────────
 
 
 def test_daemon_starts_and_runs_bounded_iterations(monkeypatch):
     calls = []
-    monkeypatch.setattr(discovery_daemon, "run_one_discovery_cycle", lambda *a, **kw: calls.append(1) or {"inspected": 0, "qualified": 0, "offers_produced": 0, "held": 0, "skipped_capacity": 0, "no_channel": 0, "error": None, "duration_seconds": 0})
+    monkeypatch.setattr(discovery_daemon, "run_one_discovery_cycle", lambda *a, **kw: calls.append(1) or {"inspected": 0, "qualified": 0, "offers_produced": 0, "held": 0, "skipped_capacity": 0, "no_channel": 0, "reconciled": 0, "error": None, "duration_seconds": 0})
 
     discovery_daemon.run_daemon("candidate-x", interval_seconds=0, max_iterations=3)
 
@@ -118,7 +125,7 @@ def test_overlapping_cycles_never_run_concurrently(monkeypatch):
         time.sleep(0.15)
         with lock:
             concurrent["count"] -= 1
-        return {"inspected": 0, "qualified": 0, "offers_produced": 0, "held": 0, "skipped_capacity": 0, "no_channel": 0, "error": None, "duration_seconds": 0}
+        return {"inspected": 0, "qualified": 0, "offers_produced": 0, "held": 0, "skipped_capacity": 0, "no_channel": 0, "reconciled": 0, "error": None, "duration_seconds": 0}
 
     monkeypatch.setattr(discovery_daemon, "run_one_discovery_cycle", _slow_cycle)
 
@@ -324,6 +331,70 @@ def test_capacity_check_is_reevaluated_between_jobs_in_the_same_cycle(monkeypatc
 
     assert summary["offers_produced"] == 1
     assert summary["skipped_capacity"] == 1  # job_b correctly held -- capacity was full by then
+
+
+# ── Permanent regression guard: an offer delivered only to a secondary
+# channel must not silently occupy capacity forever -- real production
+# finding 2026-08-25 (two offers sent during earlier iMessage-channel
+# testing never reached Telegram, the actual configured primary).
+
+
+def test_cycle_redelivers_a_secondary_channel_only_offer_to_primary(monkeypatch):
+    from attention.events import record_outbound
+
+    candidate_id = str(uuid.uuid4())
+    stuck_job = _make_job()
+    stuck_app = create_job_offer(candidate_id, stuck_job["id"])
+    record_outbound(stuck_app["id"], candidate_id, "IMESSAGE", "JOB_OFFER", "loopmessage-msg-x")
+
+    telegram_provider = _FakeProvider()
+    monkeypatch.setattr("attention.routing.resolve_primary_provider", lambda cid: telegram_provider)
+    monkeypatch.setattr("dice.discovery.run_discovery", lambda role, max_results, location, printer=None: [])
+
+    summary = discovery_daemon.run_one_discovery_cycle(candidate_id)
+
+    assert summary["reconciled"] == 1
+    from db.supabase_client import get_supabase_client
+
+    events = get_supabase_client().table("attention_events").select("channel").eq("application_id", stuck_app["id"]).eq("direction", "OUTBOUND").execute().data
+    channels = {e["channel"] for e in events}
+    assert channels == {"IMESSAGE", "TELEGRAM"}  # original history preserved, new delivery added
+
+
+def test_reconciliation_sweep_is_idempotent_across_cycles(monkeypatch):
+    from attention.events import record_outbound
+
+    candidate_id = str(uuid.uuid4())
+    stuck_app = create_job_offer(candidate_id, _make_job()["id"])
+    record_outbound(stuck_app["id"], candidate_id, "IMESSAGE", "JOB_OFFER", "loopmessage-msg-y")
+
+    telegram_provider = _FakeProvider()
+    monkeypatch.setattr("attention.routing.resolve_primary_provider", lambda cid: telegram_provider)
+    monkeypatch.setattr("dice.discovery.run_discovery", lambda role, max_results, location, printer=None: [])
+
+    first = discovery_daemon.run_one_discovery_cycle(candidate_id)
+    second = discovery_daemon.run_one_discovery_cycle(candidate_id)
+
+    assert first["reconciled"] == 1
+    assert second["reconciled"] == 0  # already delivered -- never redelivered a second time
+    assert len([s for s in telegram_provider.sent if s[0] == "job_offer"]) == 1
+
+
+def test_reconciliation_sweep_does_nothing_when_already_correctly_delivered(monkeypatch):
+    candidate_id = str(uuid.uuid4())
+    telegram_provider = _FakeProvider()
+    monkeypatch.setattr("attention.routing.resolve_primary_provider", lambda cid: telegram_provider)
+    from attention.service import notify_job_offer
+
+    app = create_job_offer(candidate_id, _make_job()["id"])
+    notify_job_offer(telegram_provider, app["id"])  # the normal, already-correct case
+    telegram_provider.sent.clear()
+    monkeypatch.setattr("dice.discovery.run_discovery", lambda role, max_results, location, printer=None: [])
+
+    summary = discovery_daemon.run_one_discovery_cycle(candidate_id)
+
+    assert summary["reconciled"] == 0
+    assert telegram_provider.sent == []
 
 
 # ── 8. stale-auth eligible job self-recovers (thin daemon-level proof --

@@ -71,6 +71,37 @@ def _unresolved_offer_count(candidate_id: str) -> int:
     return len(rows or [])
 
 
+def _reconcile_primary_channel_delivery(candidate_id: str) -> int:
+    """Permanent regression guard, real production finding 2026-08-25:
+    an offer can end up with its only outbound JOB_OFFER event on a
+    non-primary channel (e.g. sent during channel-testing before the
+    primary was reconfigured) -- silently unreachable to a candidate who
+    only checks their actual primary channel, occupying capacity
+    forever with no way for them to ever act on it.
+
+    Sweeps every still-AWAITING_USER_DECISION application for this
+    candidate at the START of each cycle and redelivers to primary if
+    missing. Cheap by construction (there are at most MAX_UNRESOLVED_
+    OFFERS such rows at any time) and idempotent -- attention.service.
+    ensure_offer_reached_primary_channel's own already_sent_outbound
+    check means a normal cycle where everything's already correctly
+    delivered redelivers nothing, every time, not just the first."""
+    from attention.service import ensure_offer_reached_primary_channel
+    from db.supabase_client import get_supabase_client
+
+    client = get_supabase_client()
+    rows = (
+        client.table("applications")
+        .select("id")
+        .eq("candidate_id", candidate_id)
+        .eq("status", "AWAITING_USER_DECISION")
+        .execute()
+        .data
+        or []
+    )
+    return sum(1 for row in rows if ensure_offer_reached_primary_channel(row["id"]).get("redelivered"))
+
+
 def _internal_job_id(external_dice_job_id: str) -> str | None:
     """run_discovery()'s own result rows key jobs by Dice's external job
     id (raw.dice_job_id) -- the readiness gate and applications.
@@ -112,9 +143,15 @@ def run_one_discovery_cycle(
         "held": 0,
         "skipped_capacity": 0,
         "no_channel": 0,
+        "reconciled": 0,
         "error": None,
     }
     try:
+        try:
+            summary["reconciled"] = _reconcile_primary_channel_delivery(candidate_id)
+        except Exception:  # noqa: BLE001 - reconciliation is best-effort; a failure here must never block real discovery
+            pass
+
         rows = run_discovery(role=role, max_results=max_results, location=location, printer=lambda line: None)
         summary["inspected"] = len(rows)
         qualified_rows = [r for r in rows if r.get("is_qualified")]
@@ -177,6 +214,7 @@ def run_daemon(
                 f"Discovery cycle done: inspected={summary['inspected']} qualified={summary['qualified']} "
                 f"offers={summary['offers_produced']} held={summary['held']} "
                 f"skipped_capacity={summary['skipped_capacity']} no_channel={summary['no_channel']} "
+                f"reconciled={summary['reconciled']} "
                 f"duration={summary['duration_seconds']}s error={summary['error']}"
             )
         finally:
