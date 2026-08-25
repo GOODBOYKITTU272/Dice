@@ -6,8 +6,24 @@ call, confirmed unmodified during the Steel compatibility spike
 """
 from __future__ import annotations
 
+import pytest
+
 import dice_browser.worker_daemon as worker_daemon
 from dice_browser.browser_provider import resolve_browser_provider
+
+
+@pytest.fixture(autouse=True)
+def _never_start_real_discovery_thread(monkeypatch):
+    """Phase M9: worker_daemon.main() now starts a background discovery
+    thread whenever DICEPILOT_CANDIDATE_ID is set -- and .env sets it to
+    the REAL production candidate by default, so any test in this file
+    that reaches that far in main() would otherwise spawn a real,
+    unmocked thread hitting real Dice.com search and real Supabase
+    writes. Autouse so no test here can ever do that by omission, not
+    just the ones that currently reach that far."""
+    import dice_browser.discovery_daemon as discovery_daemon
+
+    monkeypatch.setattr(discovery_daemon, "start_background", lambda candidate_id: None)
 
 
 def _stub_valid_resume(monkeypatch, tmp_path):

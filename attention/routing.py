@@ -36,6 +36,20 @@ def _channel_configured(channel: str) -> bool:
     return False
 
 
+def resolve_primary_provider(candidate_id: str):
+    """The candidate's real, bound primary-channel provider, or None if
+    none is bound/configured. Public counterpart to send_via_primary_
+    with_fallback's own internal lookup -- for callers (Phase M9's
+    discovery daemon) that need the provider object itself, e.g. to pass
+    into a function whose return value matters and would otherwise be
+    discarded by the notify_fn(provider, *args) -> None convention that
+    function is built around."""
+    primary = primary_channel_for_candidate(candidate_id)
+    if primary is not None and _channel_configured(primary["channel"]):
+        return _provider_for_channel_row(primary)
+    return None
+
+
 def send_via_primary_with_fallback(candidate_id: str, notify_fn: Callable, *args) -> str:
     """Returns one of: "primary", "fallback", "unknown_retryable",
     "no_channel". Never sends to both for the same event -- a primary

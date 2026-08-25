@@ -500,6 +500,11 @@ def main(argv: list[str] | None = None) -> int:
         except SteelUnavailableError as exc:
             print(f"  Steel not reachable yet ({exc}) -- the daemon will keep retrying via its normal poll loop.")
 
+    if candidate_id:
+        from dice_browser.discovery_daemon import start_background as start_discovery_background
+
+        start_discovery_background(candidate_id)
+
     print(f"DicePilot worker daemon starting -- worker_id={worker_id}, browser_provider={provider}, cdp_url={cdp_url}")
     if override:
         print(f"WARNING: --submission-policy {override.value} overrides every claimed run's own stored policy (debug only)")
