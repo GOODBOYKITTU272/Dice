@@ -233,13 +233,14 @@ def test_auth_health_stale_beyond_ttl_is_not_ready(monkeypatch):
     result = readiness.check_dice_auth_ready(candidate_id)
 
     assert result.ready is False
+    assert result.blocker == readiness.Blocker.AUTH_HEALTH_STALE
 
 
 def test_auth_health_never_verified_is_not_ready():
     candidate_id = str(uuid.uuid4())  # never marked healthy or invalid
     result = readiness.check_dice_auth_ready(candidate_id)
     assert result.ready is False
-    assert result.blocker == readiness.Blocker.AUTH_REQUIRED
+    assert result.blocker == readiness.Blocker.AUTH_NEVER_VERIFIED
 
 
 # 17. the readiness gate itself must never spend real Browserless cost
@@ -258,3 +259,142 @@ def test_browser_provider_check_never_creates_a_real_session(monkeypatch):
     result = readiness.check_browser_provider_ready()
 
     assert result.ready is True
+
+
+# ── Phase 8C: offer_job_if_ready -- the single production entrypoint ────
+
+
+class _FakeProvider:
+    channel = "TELEGRAM"
+
+    def __init__(self):
+        self.sent: list[tuple] = []
+
+    def send_job_offer(self, application, job):
+        self.sent.append(("job_offer", application["id"]))
+        return f"msg-{len(self.sent)}"
+
+
+# 7. healthy readiness -> offer created, AWAITING_USER_DECISION, notification sent
+def test_offer_job_if_ready_sends_real_offer_when_offerable(monkeypatch):
+    _fully_healthy(monkeypatch)
+    candidate_id = _make_candidate_with_healthy_auth()
+    job = _make_job()
+    provider = _FakeProvider()
+
+    result = readiness.offer_job_if_ready(provider, candidate_id, job["id"])
+
+    assert result["offered"] is True
+    application_id = result["application_id"]
+    app = get_supabase_client().table("applications").select("status").eq("id", application_id).execute().data[0]
+    assert app["status"] == "AWAITING_USER_DECISION"
+    assert provider.sent == [("job_offer", application_id)]
+
+
+# 8. AUTH_REQUIRED -> no offer, no application row, no Telegram/iMessage card
+def test_offer_job_if_ready_blocks_and_sends_nothing_when_auth_required(monkeypatch):
+    _fully_healthy(monkeypatch)
+    candidate_id = str(uuid.uuid4())
+    _created_candidate_ids.append(candidate_id)
+    dice_auth_health_repository.mark_invalid(candidate_id, "AUTH_REQUIRED on live re-check")
+    job = _make_job()
+    provider = _FakeProvider()
+
+    result = readiness.offer_job_if_ready(provider, candidate_id, job["id"])
+
+    assert result["offered"] is False
+    assert result["blocker"] == readiness.Blocker.AUTH_REQUIRED.value
+    assert provider.sent == []
+    existing = get_supabase_client().table("applications").select("id").eq("candidate_id", candidate_id).eq("dice_job_id", job["id"]).execute().data
+    assert existing == []
+
+
+# 9. never verified -> no offer
+def test_offer_job_if_ready_blocks_when_auth_never_verified(monkeypatch):
+    _fully_healthy(monkeypatch)
+    candidate_id = str(uuid.uuid4())  # deliberately never marked healthy or invalid
+    job = _make_job()
+    provider = _FakeProvider()
+
+    result = readiness.offer_job_if_ready(provider, candidate_id, job["id"])
+
+    assert result["offered"] is False
+    assert result["blocker"] == readiness.Blocker.AUTH_NEVER_VERIFIED.value
+    assert provider.sent == []
+
+
+# 10. stale auth health -> no offer
+def test_offer_job_if_ready_blocks_when_auth_stale(monkeypatch):
+    _fully_healthy(monkeypatch)
+    candidate_id = str(uuid.uuid4())
+    _created_candidate_ids.append(candidate_id)
+    dice_auth_health_repository.mark_healthy(candidate_id)
+    monkeypatch.setenv("DICEPILOT_AUTH_HEALTH_TTL_MINUTES", "0")
+    job = _make_job()
+    provider = _FakeProvider()
+
+    result = readiness.offer_job_if_ready(provider, candidate_id, job["id"])
+
+    assert result["offered"] is False
+    assert result["blocker"] == readiness.Blocker.AUTH_HEALTH_STALE.value
+    assert provider.sent == []
+
+
+# 21. permanent blocker: two consecutive calls both correctly refuse, no rows accumulate
+def test_offer_job_if_ready_permanent_blocker_never_offers_across_repeated_calls(monkeypatch):
+    _fully_healthy(monkeypatch)
+    candidate_id = _make_candidate_with_healthy_auth()
+    job = _make_job(is_easy_apply=False)
+    provider = _FakeProvider()
+
+    first = readiness.offer_job_if_ready(provider, candidate_id, job["id"])
+    second = readiness.offer_job_if_ready(provider, candidate_id, job["id"])
+
+    assert first["offered"] is False
+    assert second["offered"] is False
+    assert first["blocker"] == readiness.Blocker.NOT_EASY_APPLY.value
+    assert second["blocker"] == readiness.Blocker.NOT_EASY_APPLY.value
+    assert provider.sent == []
+    existing = get_supabase_client().table("applications").select("id").eq("candidate_id", candidate_id).eq("dice_job_id", job["id"]).execute().data
+    assert existing == []
+
+
+# 22. temporary blocker: blocked once, then clears once the real condition clears
+def test_offer_job_if_ready_temporary_blocker_is_reconsiderable_once_cleared(monkeypatch):
+    candidate_id = _make_candidate_with_healthy_auth()
+    job = _make_job()
+    provider = _FakeProvider()
+
+    monkeypatch.setattr(readiness.run_registry, "worker_status", lambda: {"online": False, "status": "OFFLINE"})
+    _ok_browser(monkeypatch)
+    _ok_resume(monkeypatch)
+    blocked = readiness.offer_job_if_ready(provider, candidate_id, job["id"])
+    assert blocked["offered"] is False
+    assert blocked["blocker"] == readiness.Blocker.WORKER_UNAVAILABLE.value
+
+    _ok_worker(monkeypatch)  # the worker is back online -- same job, no special "unheld" step needed
+    recovered = readiness.offer_job_if_ready(provider, candidate_id, job["id"])
+    assert recovered["offered"] is True
+    assert provider.sent == [("job_offer", recovered["application_id"])]
+
+
+# 23. the real production entrypoint itself never spends Browserless cost
+def test_offer_job_if_ready_never_creates_a_real_browser_session(monkeypatch):
+    _fully_healthy(monkeypatch)
+    monkeypatch.setenv("DICEPILOT_BROWSER_PROVIDER", "browserless")
+    monkeypatch.setenv("BROWSERLESS_TOKEN", "test-token")
+
+    def _boom(*a, **kw):
+        raise AssertionError("offer_job_if_ready must never create a real Browserless session")
+
+    import dice_browser.browserless_session as browserless_session
+
+    monkeypatch.setattr(browserless_session, "create_session", _boom)
+
+    candidate_id = _make_candidate_with_healthy_auth()
+    job = _make_job()
+    provider = _FakeProvider()
+
+    result = readiness.offer_job_if_ready(provider, candidate_id, job["id"])
+
+    assert result["offered"] is True

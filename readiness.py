@@ -56,6 +56,8 @@ class Blocker(str, Enum):
     WORKER_UNAVAILABLE = "WORKER_UNAVAILABLE"
     BROWSER_UNAVAILABLE = "BROWSER_UNAVAILABLE"
     AUTH_REQUIRED = "AUTH_REQUIRED"
+    AUTH_NEVER_VERIFIED = "AUTH_NEVER_VERIFIED"
+    AUTH_HEALTH_STALE = "AUTH_HEALTH_STALE"
     RESUME_MISSING = "RESUME_MISSING"
     CANDIDATE_CONFIG_INVALID = "CANDIDATE_CONFIG_INVALID"
     JOB_CLOSED = "JOB_CLOSED"
@@ -132,16 +134,16 @@ def check_dice_auth_ready(candidate_id: str) -> CheckResult:
     never optimistically healthy."""
     health = dice_auth_health_repository.get_auth_health(candidate_id)
     if health is None:
-        return CheckResult(False, "Dice auth never verified for this candidate", Blocker.AUTH_REQUIRED)
+        return CheckResult(False, "Dice auth never verified for this candidate", Blocker.AUTH_NEVER_VERIFIED)
     if not health["is_healthy"]:
         return CheckResult(False, health.get("invalidated_reason") or "Dice auth previously invalidated", Blocker.AUTH_REQUIRED)
     last_verified = health.get("last_verified_at")
     if not last_verified:
-        return CheckResult(False, "Dice auth has no recorded verification timestamp", Blocker.AUTH_REQUIRED)
+        return CheckResult(False, "Dice auth has no recorded verification timestamp", Blocker.AUTH_NEVER_VERIFIED)
     verified_dt = datetime.fromisoformat(last_verified.replace("Z", "+00:00")) if isinstance(last_verified, str) else last_verified
     age_minutes = (datetime.now(timezone.utc) - verified_dt).total_seconds() / 60
     if age_minutes > _auth_health_ttl_minutes():
-        return CheckResult(False, f"Dice auth verification stale ({age_minutes:.0f} min old)", Blocker.AUTH_REQUIRED)
+        return CheckResult(False, f"Dice auth verification stale ({age_minutes:.0f} min old)", Blocker.AUTH_HEALTH_STALE)
     return CheckResult(True)
 
 
@@ -234,3 +236,47 @@ def evaluate_offer_readiness(candidate_id: str, dice_job_id: str) -> ReadinessRe
         job=job,
         blocker=blocker,
     )
+
+
+def offer_job_if_ready(provider, candidate_id: str, dice_job_id: str) -> dict:
+    """Phase 8C: THE single production entrypoint for putting a
+    candidate's job in front of "Want me to apply?" -- every real path
+    that can create an AWAITING_USER_DECISION application and send a
+    Telegram/iMessage offer card must go through this, never call
+    db.application_repository.create_job_offer() +
+    attention.service.notify_job_offer() directly outside it (tests/
+    debug tooling may still call those directly, explicitly, never a
+    production path).
+
+    Held opportunities need no new schema/state: a NOT_OFFERABLE result
+    simply never creates an application row at all, so the job is left
+    exactly as reconsiderable next run as it was before -- check_job_
+    ready()'s own dedup logic is what makes that safe (a job with no
+    application row is, definitionally, still eligible; nothing here
+    needs to remember "this was held" separately).
+
+    Reported gap, not silently worked around: there is nowhere durable
+    to log WHY a specific job was blocked when no application row ever
+    gets created for it (application_events is keyed on application_id,
+    which doesn't exist yet for a blocked offer) -- the smallest fix
+    would be a new event log keyed on (candidate_id, dice_job_id)
+    instead, not built here to avoid inventing new workflow machinery
+    for what's currently only ever called from an ad-hoc script."""
+    from attention.service import notify_job_offer
+    from db.application_repository import DuplicateApplicationError, add_event, create_job_offer
+
+    result = evaluate_offer_readiness(candidate_id, dice_job_id)
+    if not result.offerable:
+        return {"offered": False, "blocker": result.blocker.value if result.blocker else None, "readiness": result}
+
+    try:
+        application = create_job_offer(candidate_id, dice_job_id)
+    except DuplicateApplicationError:
+        # Real TOCTOU race: readiness's own dedup check ran moments
+        # before this insert -- another concurrent offer already won.
+        # Not an error the caller should crash on; just no new offer.
+        return {"offered": False, "blocker": Blocker.DUPLICATE_APPLICATION.value, "readiness": result}
+
+    add_event(application["id"], event_type="readiness_check", step="READINESS_OFFERABLE", message="all pre-offer checks passed")
+    notify_job_offer(provider, application["id"])
+    return {"offered": True, "application_id": application["id"], "readiness": result}

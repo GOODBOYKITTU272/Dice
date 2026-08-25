@@ -12,12 +12,15 @@ second mock.
 """
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from playwright.sync_api import sync_playwright
 
 import db.application_repository as app_repo
 import dice_browser.worker as worker
 from attention.channels import bind_channel
+from db import dice_auth_health_repository
 from db.supabase_client import get_supabase_client
 from dice.models import CandidateFetchResult, CandidateFetchStatus, CandidateProfile
 from dice_browser.models import (
@@ -582,3 +585,138 @@ def test_process_one_application_proof_stop_disabled_by_default(fake_interventio
     result = worker.process_one_application(page, CANDIDATE, "test-worker")
 
     assert result.stop_reason != worker.StopReason.PROOF_STOP_EASY_APPLY_OPENED
+
+
+# ── Phase 8B: real Dice auth verification durably updates dice_auth_health ──
+# Isolated per-test candidate UUIDs (never the shared file-level CANDIDATE)
+# so these never interact with production auth-health state.
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_auth_health():
+    """Autouse for every test in this file, not just the Phase 8B ones
+    below -- process_one_application/resume_needs_input_application now
+    write real dice_auth_health rows as a side effect of ANY successful
+    open_job() call, including in every pre-existing test that uses the
+    shared file-level CANDIDATE constant. Always sweeping CANDIDATE too
+    (not just whatever a specific test appends) is what actually keeps
+    this file pollution-free after Phase B's wiring landed."""
+    created: list[str] = [CANDIDATE]
+    yield created
+    client = get_supabase_client()
+    for cid in set(created):
+        client.table("dice_auth_health").delete().eq("candidate_id", cid).execute()
+
+
+def _make_queued_application_for(candidate_id, dice_job_id):
+    # www.dice.com specifically (not bare dice.com) -- navigator.
+    # validate_canonical_url requires the exact allowed host, and this
+    # helper (unlike _make_queued_application above) is used by tests
+    # that exercise the REAL open_job(), not a monkeypatched stand-in.
+    job = app_repo.upsert_dice_job(
+        {"dice_job_id": dice_job_id, "canonical_url": f"https://www.dice.com/job-detail/{dice_job_id}", "title": "Worker Test Role"}
+    )
+    return app_repo.enqueue_application(candidate_id, job["id"])
+
+
+# 1. final ACTIVE auth result -> mark_healthy
+def test_process_one_application_marks_auth_healthy_on_active(fake_intervention_repo, page, monkeypatch, _cleanup_auth_health):
+    candidate_id = str(uuid.uuid4())
+    _cleanup_auth_health.append(candidate_id)
+    app = _make_queued_application_for(candidate_id, f"DICE-8B-{uuid.uuid4()}")
+    _patch_happy_path(monkeypatch)  # open_job -> authenticated=True
+
+    worker.process_one_application(page, candidate_id, "test-worker")
+
+    health = dice_auth_health_repository.get_auth_health(candidate_id)
+    assert health["is_healthy"] is True
+
+
+# 3. final AUTH_REQUIRED -> mark_invalid
+def test_process_one_application_marks_auth_invalid_on_auth_required(fake_intervention_repo, page, monkeypatch, _cleanup_auth_health):
+    candidate_id = str(uuid.uuid4())
+    _cleanup_auth_health.append(candidate_id)
+    app = _make_queued_application_for(candidate_id, f"DICE-8B-{uuid.uuid4()}")
+    monkeypatch.setattr(worker, "open_job", lambda page, url: _nav_result(authenticated=False))
+
+    worker.process_one_application(page, candidate_id, "test-worker")
+
+    health = dice_auth_health_repository.get_auth_health(candidate_id)
+    assert health["is_healthy"] is False
+    assert "AUTH_REQUIRED" in health["invalidated_reason"] or "auth" in health["invalidated_reason"].lower()
+
+
+# 4. SECURITY_CHALLENGE -> never healthy, distinct invalid reason
+def test_process_one_application_marks_auth_invalid_on_security_challenge(fake_intervention_repo, page, monkeypatch, _cleanup_auth_health):
+    from dice_browser.models import ChallengeType
+
+    candidate_id = str(uuid.uuid4())
+    _cleanup_auth_health.append(candidate_id)
+    app = _make_queued_application_for(candidate_id, f"DICE-8B-{uuid.uuid4()}")
+    monkeypatch.setattr(worker, "open_job", lambda page, url: _nav_result(challenge=ChallengeType.CAPTCHA))
+
+    worker.process_one_application(page, candidate_id, "test-worker")
+
+    health = dice_auth_health_repository.get_auth_health(candidate_id)
+    assert health["is_healthy"] is False
+    assert "SECURITY_CHALLENGE" in health["invalidated_reason"]
+
+
+# 2. the transient first-load hydration race, resolved by navigator.open_job's
+# own retry, must never poison auth health -- worker._record_auth_health only
+# ever sees the FINAL bounded NavigationResult, proven end to end with the
+# REAL open_job (not monkeypatched away) against a stateful fake page.
+def test_hydration_race_recovery_ends_up_healthy_never_invalid(fake_intervention_repo, page, monkeypatch, _cleanup_auth_health):
+    from dice_browser.navigator import open_job as real_open_job
+
+    candidate_id = str(uuid.uuid4())
+    _cleanup_auth_health.append(candidate_id)
+    app = _make_queued_application_for(candidate_id, f"DICE-8B-{uuid.uuid4()}")
+    _patch_happy_path(monkeypatch)
+
+    login_html = '<html><body><a href="/dashboard/login">Login</a></body></html>'
+    authenticated_html = '<html><body><nav aria-label="Account"></nav><apply-button-wc></apply-button-wc></body></html>'
+    state = {"loaded": False}
+
+    def fake_goto(target_url, **kwargs):
+        page.set_content(login_html)
+        return None
+
+    def fake_reload(**kwargs):
+        state["loaded"] = True
+        page.set_content(authenticated_html)
+        return None
+
+    monkeypatch.setattr(worker, "open_job", real_open_job)
+    monkeypatch.setattr(page, "goto", fake_goto)
+    monkeypatch.setattr(page, "reload", fake_reload)
+
+    worker.process_one_application(page, candidate_id, "test-worker")
+
+    assert state["loaded"] is True  # the retry actually ran
+    health = dice_auth_health_repository.get_auth_health(candidate_id)
+    assert health["is_healthy"] is True  # never left invalid from the transient first check
+
+
+# 5. a later mark_invalid always overrides a previous healthy TTL window
+# (this is readiness.check_dice_auth_ready's own contract -- already proven
+# directly in tests/test_readiness.py; re-asserted here at the repository
+# level for Phase B's own test list).
+def test_mark_invalid_after_healthy_overrides_regardless_of_ttl(_cleanup_auth_health):
+    candidate_id = str(uuid.uuid4())
+    _cleanup_auth_health.append(candidate_id)
+    dice_auth_health_repository.mark_healthy(candidate_id)
+    dice_auth_health_repository.mark_invalid(candidate_id, "AUTH_REQUIRED on live re-check")
+
+    health = dice_auth_health_repository.get_auth_health(candidate_id)
+    assert health["is_healthy"] is False
+
+
+# 6. worker restart never invents healthy auth without a real verification --
+# nothing in this file marks a candidate healthy except a real open_job()
+# call inside process_one_application/resume_needs_input_application; a
+# freshly-started worker with no prior verification simply has no row yet.
+def test_no_auth_health_row_exists_without_a_real_verification(_cleanup_auth_health):
+    candidate_id = str(uuid.uuid4())
+    _cleanup_auth_health.append(candidate_id)
+    assert dice_auth_health_repository.get_auth_health(candidate_id) is None

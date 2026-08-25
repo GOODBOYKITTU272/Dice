@@ -51,6 +51,7 @@ from playwright.sync_api import Page
 import run_registry
 from attention.routing import send_via_primary_with_fallback
 from attention.service import notify_submission_failure
+from db import dice_auth_health_repository
 from db.application_repository import (
     add_event,
     claim_next_queued_application,
@@ -136,6 +137,31 @@ def _fail(application_id: str, status: str, error_code: str, error_message: str)
         send_via_primary_with_fallback(application["candidate_id"], notify_submission_failure, application_id, error_message)
     except Exception:
         pass
+
+
+def _record_auth_health(candidate_id: str, nav_result) -> None:
+    """Phase 8B: the one place a real, live Dice auth verification --
+    always via navigator.open_job()'s own reload-and-recheck retry, the
+    sole canonical classification path, never duplicated here -- gets
+    recorded durably into dice_auth_health (readiness.py's own source
+    of truth). Only ever called with the FINAL bounded NavigationResult:
+    open_job's retry already resolved any transient first-load
+    hydration race (2026-08-24/25's live finding) before returning, so
+    this never sees or persists that intermediate first-check state --
+    a transient AUTH_REQUIRED that a reload immediately fixed must
+    never poison durable auth health.
+
+    A security challenge is its own distinct blocking condition, never
+    conflated with a real logout: still marked invalid (readiness must
+    still withhold offers), but with a reason an operator can tell
+    apart from AUTH_REQUIRED."""
+    if nav_result.challenge_type is not None:
+        dice_auth_health_repository.mark_invalid(candidate_id, f"SECURITY_CHALLENGE: {nav_result.challenge_type.value}")
+        return
+    if nav_result.authenticated:
+        dice_auth_health_repository.mark_healthy(candidate_id)
+    else:
+        dice_auth_health_repository.mark_invalid(candidate_id, "AUTH_REQUIRED on live re-check")
 
 
 _PROOF_STOP_ENV_VAR = "DICEPILOT_PROOF_STOP_AFTER_EASY_APPLY_OPEN"
@@ -425,6 +451,7 @@ def process_one_application(
     # TalentFish finding from Phase 5's audit: stored qualification can
     # go stale between discovery time and application time).
     nav_result = open_job(page, canonical_url)
+    _record_auth_health(candidate_id, nav_result)
     if not nav_result.authenticated:
         _fail(application_id, "FAILED_RETRYABLE", "AUTH_REQUIRED", "not authenticated on live re-check")
         return ApplicationRunResult(application_id, dice_job_id, StopReason.AUTH_REQUIRED, "not authenticated")
@@ -504,6 +531,7 @@ def resume_needs_input_application(
     canonical_url = dice_job["canonical_url"]
 
     nav_result = open_job(page, canonical_url)
+    _record_auth_health(application["candidate_id"], nav_result)
     if not nav_result.authenticated:
         return ApplicationRunResult(application_id, dice_job_id, StopReason.AUTH_REQUIRED, "not authenticated")
     if nav_result.challenge_type is not None:

@@ -246,3 +246,38 @@ def live_client():
     except Exception as exc:  # noqa: BLE001 - schema not applied yet
         pytest.skip(f"DicePilot schema not available on linked project: {exc}")
     return client
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _sweep_dice_auth_health_test_pollution():
+    """Phase 8B, live-found 2026-08-25: worker.process_one_application/
+    resume_needs_input_application now write real dice_auth_health rows
+    as a side effect of any successful open_job() call -- including in
+    every pre-existing test across the suite (test_worker_run.py,
+    test_worker_daemon_architecture.py, test_jobs_apply_to_worker.py,
+    ...) that exercises those functions with a synthetic candidate_id,
+    none of which know this new table exists to clean it up themselves.
+
+    Rather than hand-patch every one of those files, this is one
+    session-scoped blanket sweep: snapshot which candidate_ids already
+    have a row before the suite runs, and afterward delete only the
+    ones that appeared during this run -- never touching a row that
+    predates the test session (e.g. the real candidate's genuine
+    production auth-health state)."""
+    try:
+        from db.supabase_client import get_supabase_client
+
+        client = get_supabase_client()
+        before = {r["candidate_id"] for r in client.table("dice_auth_health").select("candidate_id").execute().data}
+    except Exception:  # noqa: BLE001 - table/creds unavailable; nothing to sweep
+        yield
+        return
+
+    yield
+
+    try:
+        after = {r["candidate_id"] for r in client.table("dice_auth_health").select("candidate_id").execute().data}
+        for candidate_id in after - before:
+            client.table("dice_auth_health").delete().eq("candidate_id", candidate_id).execute()
+    except Exception:  # noqa: BLE001 - best-effort cleanup only, never fail the suite over it
+        pass
