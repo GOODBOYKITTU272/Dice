@@ -285,11 +285,11 @@ def test_readiness_check_omits_browserless_key_for_other_providers(monkeypatch, 
 
 def test_connect_for_provider_dispatches_browserless_to_its_own_connect(monkeypatch):
     calls = []
-    monkeypatch.setattr(worker_daemon, "_connect_browserless", lambda: calls.append("called") or (object(), object()))
+    monkeypatch.setattr(worker_daemon, "_connect_browserless", lambda candidate_id: calls.append(candidate_id) or (object(), object()))
 
-    worker_daemon._connect_for_provider("unused-cdp-url", "browserless")
+    worker_daemon._connect_for_provider("unused-cdp-url", "browserless", "cand-1")
 
-    assert calls == ["called"]
+    assert calls == ["cand-1"]
 
 
 def test_connect_browserless_creates_a_fresh_session_and_loads_cookies(monkeypatch):
@@ -306,7 +306,7 @@ def test_connect_browserless_creates_a_fresh_session_and_loads_cookies(monkeypat
         "secure": True, "httpOnly": False, "sameSite": "lax", "expirationDate": 123,
     }
     monkeypatch.setattr(browserless_session, "create_session", fake_create_session)
-    monkeypatch.setattr(browserless_session, "load_dice_cookies", lambda: [fake_cookie])
+    monkeypatch.setattr(browserless_session, "load_dice_cookies_for_candidate", lambda candidate_id: [fake_cookie])
 
     added_cookies = []
 
@@ -342,7 +342,7 @@ def test_connect_browserless_creates_a_fresh_session_and_loads_cookies(monkeypat
 
     monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: _FakeSyncPlaywrightCtx())
 
-    playwright, page = worker_daemon._connect_browserless()
+    playwright, page = worker_daemon._connect_browserless("cand-1")
 
     assert calls["create_session"] == 1
     assert connect_calls == ["wss://fresh-session-url"]

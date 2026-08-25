@@ -40,6 +40,43 @@ class UnresolvableEventError(RuntimeError):
     should treat this as "ignore the message", never as a reason to guess."""
 
 
+class CrossCandidateAuthorizationError(UnresolvableEventError):
+    """Phase M8A: raised when a resolved application_id belongs to a
+    DIFFERENT candidate than the one this event's sender identity was
+    resolved to. Not currently reachable via either real provider (their
+    parse_inbound() never sets event.application_id -- see the module
+    docstring on handle_event), but this is the defense-in-depth check
+    for the day some other caller does supply one. Subclasses
+    UnresolvableEventError so attention.consumer's existing "ignored_
+    stale" handling still applies -- no state transition, no answer
+    mutation, no notification -- while remaining separately named/
+    loggable as an authorization failure, not an ordinary stale event."""
+
+
+def _verify_ownership(application_id: str, candidate_id: str | None) -> dict:
+    """Loads the application and asserts it belongs to candidate_id
+    (when given). Every inbound handler below calls this immediately
+    after resolving application_id, before any read of intervention/
+    answer state or any write -- the check must happen before anything
+    it would need to reject has a chance to run. candidate_id is None
+    only for the pre-Phase-7.5 offline-test call path (no real sender
+    identity resolved); those are unaffected."""
+    import logging
+
+    application = get_application(application_id)
+    if candidate_id is not None and application["candidate_id"] != candidate_id:
+        logging.getLogger(__name__).warning(
+            "Rejected cross-candidate attention event: sender resolved to "
+            "candidate_id=%s attempted to act on application_id=%s owned by "
+            "a different candidate. No state change made.",
+            candidate_id, application_id,
+        )
+        raise CrossCandidateAuthorizationError(
+            f"application {application_id!r} does not belong to candidate {candidate_id!r}"
+        )
+    return application
+
+
 # ── outbound ────────────────────────────────────────────────────────────
 
 
@@ -124,7 +161,7 @@ def notify_reconnect_success(provider: AttentionProvider, application_id: str) -
 # ── inbound ─────────────────────────────────────────────────────────────
 
 
-def handle_apply(application_id: str) -> bool:
+def handle_apply(application_id: str, candidate_id: str | None = None) -> bool:
     """Apply is authorization to complete and submit -- nothing more.
     Idempotent by construction: a second Apply finds the application no
     longer AWAITING_USER_DECISION and no-ops. Never opens a browser here
@@ -133,8 +170,10 @@ def handle_apply(application_id: str) -> bool:
     daemon picks this run up on its own next poll. Returns True only when
     this call actually changed state -- handle_event uses that to decide
     whether to send the (send-once) Apply acknowledgement, never on a
-    duplicate/replayed Apply."""
-    application = get_application(application_id)
+    duplicate/replayed Apply. candidate_id, when given, must own this
+    application (CrossCandidateAuthorizationError otherwise) -- see
+    _verify_ownership."""
+    application = _verify_ownership(application_id, candidate_id)
     if application["status"] != "AWAITING_USER_DECISION":
         return False
     update_application_status(application_id, "QUEUED")
@@ -142,11 +181,12 @@ def handle_apply(application_id: str) -> bool:
     return True
 
 
-def handle_skip(application_id: str) -> bool:
+def handle_skip(application_id: str, candidate_id: str | None = None) -> bool:
     """Idempotent: a second Skip finds the application already SKIPPED
     (or past that point) and no-ops. Returns True only when this call
-    actually changed state -- see handle_apply."""
-    application = get_application(application_id)
+    actually changed state -- see handle_apply. candidate_id ownership
+    check: see handle_apply."""
+    application = _verify_ownership(application_id, candidate_id)
     if application["status"] != "AWAITING_USER_DECISION":
         return False
     update_application_status(application_id, "SKIPPED")
@@ -164,11 +204,11 @@ def handle_answer(provider: AttentionProvider, event: NormalizedEvent, candidate
     if already_processed_inbound(event.channel, event.external_message_id):
         return
     application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT", candidate_id)
+    application = _verify_ownership(application_id, candidate_id)
     question_id = event.question_id or latest_active_question_id(application_id)
     if question_id is None:
         raise UnresolvableEventError("no pending question to attribute this answer to")
 
-    application = get_application(application_id)
     record_inbound(
         application_id,
         application["candidate_id"],
@@ -210,6 +250,7 @@ def handle_confirm(provider: AttentionProvider, event: NormalizedEvent, candidat
     if already_processed_inbound(event.channel, event.external_message_id):
         return
     application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT", candidate_id)
+    application = _verify_ownership(application_id, candidate_id)
     question_id = event.question_id or latest_active_question_id(application_id)
     if question_id is None:
         raise UnresolvableEventError("no pending question to confirm")
@@ -222,7 +263,6 @@ def handle_confirm(provider: AttentionProvider, event: NormalizedEvent, candidat
     if intervention is None:
         raise UnresolvableEventError(f"no open intervention for question_id={question_id!r}")
 
-    application = get_application(application_id)
     resolve_question_intervention(intervention["id"], raw_answer, source="candidate_via_messaging")
     record_inbound(
         application_id,
@@ -254,11 +294,11 @@ def handle_edit(provider: AttentionProvider, event: NormalizedEvent, candidate_i
     if already_processed_inbound(event.channel, event.external_message_id):
         return
     application_id = event.application_id or _resolve_pending_application_id("NEEDS_INPUT", candidate_id)
+    application = _verify_ownership(application_id, candidate_id)
     question_id = event.question_id or latest_active_question_id(application_id)
     if question_id is None:
         raise UnresolvableEventError("no pending question to edit")
 
-    application = get_application(application_id)
     record_inbound(
         application_id,
         application["candidate_id"],
@@ -303,13 +343,15 @@ def handle_event(provider: AttentionProvider, event: NormalizedEvent, candidate_
     processed Apply/Skip."""
     if event.action == AttentionAction.APPLY:
         application_id = event.application_id or _resolve_offer_application_id(candidate_id)
+        _verify_ownership(application_id, candidate_id)
         _record_offer_decision_inbound(event, application_id, AttentionAction.APPLY)
-        if handle_apply(application_id):
+        if handle_apply(application_id, candidate_id):
             _send_once(provider, application_id, MessageType.APPLY_ACK, provider.send_apply_ack)
     elif event.action == AttentionAction.SKIP:
         application_id = event.application_id or _resolve_offer_application_id(candidate_id)
+        _verify_ownership(application_id, candidate_id)
         _record_offer_decision_inbound(event, application_id, AttentionAction.SKIP)
-        if handle_skip(application_id):
+        if handle_skip(application_id, candidate_id):
             _send_once(provider, application_id, MessageType.SKIP_ACK, provider.send_skip_ack)
     elif event.action == AttentionAction.ANSWER:
         handle_answer(provider, event, candidate_id)

@@ -26,6 +26,7 @@ OFFERABLE right now, and if not, why not.
 from __future__ import annotations
 
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -255,6 +256,11 @@ def offer_job_if_ready(provider, candidate_id: str, dice_job_id: str) -> dict:
     application row is, definitionally, still eligible; nothing here
     needs to remember "this was held" separately).
 
+    Phase M8C: AUTH_HEALTH_STALE, and ONLY that blocker (every other
+    check already passed), is not treated as a dead end -- see
+    _offer_after_auth_recovery. Every other blocker still just reports
+    and holds, unchanged.
+
     Reported gap, not silently worked around: there is nowhere durable
     to log WHY a specific job was blocked when no application row ever
     gets created for it (application_events is keyed on application_id,
@@ -262,12 +268,18 @@ def offer_job_if_ready(provider, candidate_id: str, dice_job_id: str) -> dict:
     would be a new event log keyed on (candidate_id, dice_job_id)
     instead, not built here to avoid inventing new workflow machinery
     for what's currently only ever called from an ad-hoc script."""
-    from attention.service import notify_job_offer
-    from db.application_repository import DuplicateApplicationError, add_event, create_job_offer
-
     result = evaluate_offer_readiness(candidate_id, dice_job_id)
     if not result.offerable:
+        if _is_auth_stale_the_only_blocker(result):
+            return _offer_after_auth_recovery(provider, candidate_id, dice_job_id, result)
         return {"offered": False, "blocker": result.blocker.value if result.blocker else None, "readiness": result}
+
+    return _create_and_send_offer(provider, candidate_id, dice_job_id, result)
+
+
+def _create_and_send_offer(provider, candidate_id: str, dice_job_id: str, result: ReadinessResult) -> dict:
+    from attention.service import notify_job_offer
+    from db.application_repository import DuplicateApplicationError, add_event, create_job_offer
 
     try:
         application = create_job_offer(candidate_id, dice_job_id)
@@ -282,6 +294,86 @@ def offer_job_if_ready(provider, candidate_id: str, dice_job_id: str) -> dict:
     return {"offered": True, "application_id": application["id"], "readiness": result}
 
 
+def _is_auth_stale_the_only_blocker(result: ReadinessResult) -> bool:
+    """Guards the auto-recovery path so it only ever fires for the exact
+    case the product spec calls for: a genuinely eligible opportunity
+    (every OTHER check already passed) blocked purely on an expired
+    freshness timestamp -- never spending a Browserless session on a job
+    that has some other, unrelated problem too."""
+    return (
+        result.dice_auth.blocker == Blocker.AUTH_HEALTH_STALE
+        and result.worker.ready
+        and result.browser.ready
+        and result.resume.ready
+        and result.candidate.ready
+        and result.job.ready
+    )
+
+
+_auth_verification_locks: dict[str, threading.Lock] = {}
+_auth_verification_locks_guard = threading.Lock()
+
+
+def _try_acquire_auth_verification_lock(candidate_id: str) -> bool:
+    """Candidate A gets at most one active auth-verification attempt at
+    a time -- a second stale-eligible job for the same candidate arriving
+    while one is already in flight finds the lock held and is left held,
+    never triggering a second Browserless session."""
+    with _auth_verification_locks_guard:
+        lock = _auth_verification_locks.setdefault(candidate_id, threading.Lock())
+    return lock.acquire(blocking=False)
+
+
+def _release_auth_verification_lock(candidate_id: str) -> None:
+    with _auth_verification_locks_guard:
+        lock = _auth_verification_locks.get(candidate_id)
+    if lock is not None:
+        lock.release()
+
+
+def _offer_after_auth_recovery(provider, candidate_id: str, dice_job_id: str, stale_result: ReadinessResult) -> dict:
+    """AUTH_HEALTH_STALE alone (every other check already passed) means
+    the durable freshness timestamp expired, not that the login is
+    necessarily dead -- a human being asked "please manually approve a
+    read-only login check" every time that timestamp ages past
+    DEFAULT_AUTH_HEALTH_TTL_MINUTES is exactly the product gap this
+    closes. Runs ONE bounded, read-only verification (reconnect_dice's
+    own canonical path -- navigator.open_job, its reload-retry included
+    -- unchanged, not duplicated here) and re-evaluates the SAME job
+    once, fresh. Never creates an application or sends Apply/Skip before
+    the verification result and the fresh re-check are both known.
+
+    If verification itself finds AUTH_REQUIRED, or the job is no longer
+    offerable for some other reason after the fresh re-check, the job is
+    simply left held -- no application row, exactly as reconsiderable on
+    a later call as any other blocked opportunity. Never a second offer:
+    the fresh re-check goes through the exact same create_job_offer()
+    dedup path as every other offer."""
+    if not _try_acquire_auth_verification_lock(candidate_id):
+        return {"offered": False, "blocker": Blocker.AUTH_HEALTH_STALE.value, "readiness": stale_result}
+    try:
+        try:
+            reconnect_result = reconnect_dice(provider, candidate_id)
+        except Exception:
+            # Browserless/provider itself unreachable -- distinct from a
+            # confirmed AUTH_REQUIRED: the login status is still unknown,
+            # not disproven, so this stays under the SAME stale blocker
+            # (still reconsiderable) rather than escalating to "reconnect
+            # required", which would incorrectly claim the login is dead.
+            return {"offered": False, "blocker": Blocker.AUTH_HEALTH_STALE.value, "readiness": stale_result}
+    finally:
+        _release_auth_verification_lock(candidate_id)
+
+    if not reconnect_result.get("reconnected"):
+        return {"offered": False, "blocker": Blocker.AUTH_REQUIRED.value, "readiness": stale_result}
+
+    fresh_result = evaluate_offer_readiness(candidate_id, dice_job_id)
+    if not fresh_result.offerable:
+        return {"offered": False, "blocker": fresh_result.blocker.value if fresh_result.blocker else None, "readiness": fresh_result}
+
+    return _create_and_send_offer(provider, candidate_id, dice_job_id, fresh_result)
+
+
 def reconnect_dice(provider, candidate_id: str) -> dict:
     """Phase 8D: the manual-trigger stand-in for the real interactive
     "Reconnect Dice" flow. Deferred, not skipped: Browserless's LiveURL
@@ -291,24 +383,32 @@ def reconnect_dice(provider, candidate_id: str) -> dict:
     Swappable by design -- whatever eventually triggers a real
     interactive login success (a paid LiveURL flow, or anything else)
     should call this exact function, unchanged, as its completion step;
-    right now the trigger is simply "a human refreshed
-    DICE_AUTH_COOKIES_JSON and asks us to check."
+    right now the trigger is simply "an operator provisioned this
+    candidate's auth state (db.dice_auth_state_repository.save_auth_
+    state) and asks us to check."
 
     Never trusts "the login page disappeared" -- runs one short-lived,
     bounded Browserless session through the SAME canonical auth-
     classification path (navigator.open_job, its own reload-retry
     included) real application processing uses, and only records what
     that positively observed. The session is a few minutes, never held
-    open (cost control)."""
+    open (cost control).
+
+    Phase M8B: reads this candidate's own auth state (db.dice_auth_
+    state_repository, Vault-backed) -- never the old global
+    DICE_AUTH_COOKIES_JSON. An operator provisions/replaces a candidate's
+    state with db.dice_auth_state_repository.save_auth_state(candidate_id,
+    cookies_json) before calling this; this function only ever verifies
+    and records health for the ONE candidate_id it's given."""
     from playwright.sync_api import sync_playwright
 
-    from dice_browser.browserless_session import create_session, load_dice_cookies, stop_session, to_playwright_cookies
+    from dice_browser.browserless_session import create_session, load_dice_cookies_for_candidate, stop_session, to_playwright_cookies
     from dice_browser.navigator import open_job
     from dice_browser.worker import _record_auth_health
 
-    raw_cookies = load_dice_cookies()
+    raw_cookies = load_dice_cookies_for_candidate(candidate_id)
     if not raw_cookies:
-        return {"reconnected": False, "reason": "no Dice auth state configured"}
+        return {"reconnected": False, "reason": "no candidate-scoped Dice auth state configured for this candidate"}
 
     client = get_supabase_client()
     any_job = client.table("dice_jobs").select("canonical_url").limit(1).execute().data

@@ -14,7 +14,7 @@ import uuid
 import pytest
 
 from attention.models import AttentionAction, NormalizedEvent
-from attention.service import UnresolvableEventError, handle_apply, handle_confirm, handle_edit, handle_event, handle_skip, notify_job_offer, notify_next_missing_question, notify_reconnect_required, notify_reconnect_success
+from attention.service import CrossCandidateAuthorizationError, UnresolvableEventError, handle_apply, handle_confirm, handle_edit, handle_event, handle_skip, notify_job_offer, notify_next_missing_question, notify_reconnect_required, notify_reconnect_success
 from db.application_repository import create_job_offer, get_application, update_application_status, upsert_dice_job
 from db.intervention_repository import (
     ApplicationReadiness,
@@ -584,3 +584,140 @@ def test_notify_reconnect_success_sends_once_not_twice(live_client):
     notify_reconnect_success(provider, application["id"])
 
     assert provider.sent == [("reconnect_success", application["id"])]
+
+
+# ── Phase M8A: cross-candidate ownership hardening ───────────────────────
+# Defense-in-depth: neither real provider's parse_inbound() ever sets
+# event.application_id (see handle_event's docstring), so none of these
+# are reachable via a real Telegram/LoopMessage tap today. These tests
+# simulate what WOULD happen if a future provider or a hand-crafted
+# event ever did carry a foreign application_id -- every one must be
+# REJECTED with zero state change and zero side effect.
+
+
+def test_apply_rejects_cross_candidate_application(live_client):
+    candidate_a = str(uuid.uuid4())
+    candidate_b = str(uuid.uuid4())
+    job = _make_test_job()
+    offer = create_job_offer(candidate_a, job["id"])
+
+    with pytest.raises(CrossCandidateAuthorizationError):
+        handle_apply(offer["id"], candidate_id=candidate_b)
+
+    assert get_application(offer["id"])["status"] == "AWAITING_USER_DECISION"
+
+
+def test_skip_rejects_cross_candidate_application(live_client):
+    candidate_a = str(uuid.uuid4())
+    candidate_b = str(uuid.uuid4())
+    job = _make_test_job()
+    offer = create_job_offer(candidate_a, job["id"])
+
+    with pytest.raises(CrossCandidateAuthorizationError):
+        handle_skip(offer["id"], candidate_id=candidate_b)
+
+    assert get_application(offer["id"])["status"] == "AWAITING_USER_DECISION"
+
+
+def test_handle_event_apply_rejects_cross_candidate_and_sends_no_ack(live_client):
+    candidate_a = str(uuid.uuid4())
+    candidate_b = str(uuid.uuid4())
+    job = _make_test_job()
+    offer = create_job_offer(candidate_a, job["id"])
+    provider = _FakeProvider()
+    event = NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.APPLY, application_id=offer["id"])
+
+    with pytest.raises(CrossCandidateAuthorizationError):
+        handle_event(provider, event, candidate_b)
+
+    assert get_application(offer["id"])["status"] == "AWAITING_USER_DECISION"
+    assert provider.sent == []
+
+
+def test_handle_event_skip_rejects_cross_candidate_and_sends_no_ack(live_client):
+    candidate_a = str(uuid.uuid4())
+    candidate_b = str(uuid.uuid4())
+    job = _make_test_job()
+    offer = create_job_offer(candidate_a, job["id"])
+    provider = _FakeProvider()
+    event = NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.SKIP, application_id=offer["id"])
+
+    with pytest.raises(CrossCandidateAuthorizationError):
+        handle_event(provider, event, candidate_b)
+
+    assert get_application(offer["id"])["status"] == "AWAITING_USER_DECISION"
+    assert provider.sent == []
+
+
+def test_answer_rejects_cross_candidate_application(live_client):
+    candidate_a = str(uuid.uuid4())
+    candidate_b = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _needs_input_application(candidate_a, job["id"])
+    update_application_status(application["id"], "NEEDS_INPUT")
+    intervention = create_or_get_question_intervention(
+        application_id=application["id"], question_id="q-1", question_prompt="Are you 18 or older?",
+        field_type="RADIO", reason="no trusted candidate mapping", choices=["Yes", "No"],
+    )
+    provider = _FakeProvider()
+    event = NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER,
+                             application_id=application["id"], question_id="q-1", raw_text="Yes")
+
+    with pytest.raises(CrossCandidateAuthorizationError):
+        handle_event(provider, event, candidate_b)
+
+    client = get_supabase_client()
+    row = client.table("interventions").select("status, answer").eq("id", intervention["id"]).execute().data[0]
+    assert row["status"] == "OPEN"
+    assert row["answer"] is None
+    assert provider.sent == []
+
+
+def test_confirm_rejects_cross_candidate_application(live_client):
+    candidate_a = str(uuid.uuid4())
+    candidate_b = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _needs_input_application(candidate_a, job["id"])
+    update_application_status(application["id"], "NEEDS_INPUT")
+    intervention = create_or_get_question_intervention(
+        application_id=application["id"], question_id="q-1", question_prompt="Are you 18 or older?",
+        field_type="RADIO", reason="no trusted candidate mapping", choices=["Yes", "No"],
+    )
+    provider = _FakeProvider()
+    from attention.service import handle_answer
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER,
+                                             application_id=application["id"], question_id="q-1", raw_text="Yes"))
+
+    confirm_event = NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.CONFIRM,
+                                     application_id=application["id"], question_id="q-1")
+    with pytest.raises(CrossCandidateAuthorizationError):
+        handle_event(provider, confirm_event, candidate_b)
+
+    client = get_supabase_client()
+    row = client.table("interventions").select("status, answer").eq("id", intervention["id"]).execute().data[0]
+    assert row["status"] == "OPEN"  # still unconfirmed -- candidate B's confirm never touched candidate A's intervention
+
+
+def test_edit_rejects_cross_candidate_application(live_client):
+    candidate_a = str(uuid.uuid4())
+    candidate_b = str(uuid.uuid4())
+    job = _make_test_job()
+    application = _needs_input_application(candidate_a, job["id"])
+    update_application_status(application["id"], "NEEDS_INPUT")
+    intervention = create_or_get_question_intervention(
+        application_id=application["id"], question_id="q-1", question_prompt="Are you 18 or older?",
+        field_type="RADIO", reason="no trusted candidate mapping", choices=["Yes", "No"],
+    )
+    provider = _FakeProvider()
+    from attention.service import handle_answer
+    handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER,
+                                             application_id=application["id"], question_id="q-1", raw_text="Yes"))
+
+    edit_event = NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.EDIT,
+                                  application_id=application["id"], question_id="q-1")
+    with pytest.raises(CrossCandidateAuthorizationError):
+        handle_event(provider, edit_event, candidate_b)
+
+    client = get_supabase_client()
+    row = client.table("interventions").select("status, answer").eq("id", intervention["id"]).execute().data[0]
+    assert row["answer"] is None  # candidate B's edit never discarded candidate A's pending answer

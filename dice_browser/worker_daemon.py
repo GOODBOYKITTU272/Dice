@@ -119,26 +119,30 @@ def _connect(cdp_url: str):
     return playwright, page
 
 
-def _connect_browserless():
+def _connect_browserless(candidate_id: str | None):
     """Browserless's own connect path -- deliberately does NOT take a
     cdp_url at all. Creates a brand-new session on every call (never
     depends on one static, manually-copied session URL, which is exactly
     what expired mid-development and needed a human to notice and fix by
-    hand) and loads the candidate's persisted Dice cookies into it before
-    any navigation. A missing/expired Dice cookie set isn't a connect
-    failure here -- open_job()'s own live authenticated-check (already
-    used by every provider) is what correctly turns that into
-    AUTH_REQUIRED, never a crash."""
+    hand) and loads exactly this candidate's persisted Dice cookies into
+    it before any navigation -- Phase M8B: candidate-scoped
+    (db.dice_auth_state_repository, Vault-backed), never the single
+    global account every candidate used to share. A missing/expired Dice
+    cookie set isn't a connect failure here -- open_job()'s own live
+    authenticated-check (already used by every provider) is what
+    correctly turns that into AUTH_REQUIRED, never a crash. The
+    Browserless session/token itself IS shared across candidates -- only
+    the auth state loaded into it is candidate-scoped."""
     from playwright.sync_api import sync_playwright
 
-    from dice_browser.browserless_session import create_session, load_dice_cookies, to_playwright_cookies
+    from dice_browser.browserless_session import create_session, load_dice_cookies_for_candidate, to_playwright_cookies
 
     session = create_session()
     playwright = sync_playwright().start()
     try:
         browser = playwright.chromium.connect_over_cdp(session["connect"])
         ctx = browser.contexts[0] if browser.contexts else browser.new_context()
-        raw_cookies = load_dice_cookies()
+        raw_cookies = load_dice_cookies_for_candidate(candidate_id) if candidate_id else None
         if raw_cookies:
             ctx.add_cookies(to_playwright_cookies(raw_cookies))
         page = ctx.new_page()
@@ -148,7 +152,7 @@ def _connect_browserless():
     return playwright, page
 
 
-def _connect_for_provider(cdp_url: str, provider: str):
+def _connect_for_provider(cdp_url: str, provider: str, candidate_id: str | None = None):
     """The one place "get me a working browser connection" happens.
     Steel: ensures a live session exists (creating one automatically if
     not -- the viewer is never required for this), then clears any stale
@@ -156,7 +160,10 @@ def _connect_for_provider(cdp_url: str, provider: str):
     left on the shared, persistent profile. Local: connects directly --
     there's nothing to "ensure", the human already has Chrome open.
     Browserless: creates its own fresh session every time -- cdp_url is
-    unused for this provider, see _connect_browserless()."""
+    unused for this provider, see _connect_browserless(). candidate_id is
+    only meaningful for browserless (candidate-scoped auth); steel/local
+    ignore it -- their auth model is one already-logged-in profile/CDP
+    session, unaffected by this phase."""
     if provider == "steel":
         steel_base_url = resolve_steel_base_url(cdp_url)
         ensure_steel_session(steel_base_url)  # raises SteelUnavailableError if the API itself is down
@@ -165,13 +172,14 @@ def _connect_for_provider(cdp_url: str, provider: str):
             clean_stale_singleton_locks(profile_dir)
         return _connect(cdp_url)
     if provider == "browserless":
-        return _connect_browserless()
+        return _connect_browserless(candidate_id)
     return _connect(cdp_url)
 
 
 def _connect_with_recovery(
     cdp_url: str,
     provider: str,
+    candidate_id: str | None = None,
     max_attempts: int = DEFAULT_MAX_RECOVERY_ATTEMPTS,
     backoff_seconds: float = DEFAULT_RECOVERY_BACKOFF_SECONDS,
 ):
@@ -183,7 +191,7 @@ def _connect_with_recovery(
     last_exc: Exception | None = None
     for attempt in range(max_attempts):
         try:
-            return _connect_for_provider(cdp_url, provider)
+            return _connect_for_provider(cdp_url, provider, candidate_id)
         except Exception as exc:  # noqa: BLE001 - any connect failure (Steel unreachable, CDP refused, ...) is retryable here
             last_exc = exc
             if attempt < max_attempts - 1:
@@ -191,7 +199,7 @@ def _connect_with_recovery(
     raise last_exc
 
 
-def _check_browser_and_auth(cdp_url: str, provider: str) -> str:
+def _check_browser_and_auth(cdp_url: str, provider: str, candidate_id: str | None = None) -> str:
     """One connect / navigate / classify / disconnect cycle -- returns
     ONLINE, BROWSER_DISCONNECTED, AUTH_REQUIRED, or SECURITY_CHALLENGE.
     Used for the periodic idle-poll status the frontend shows; never
@@ -199,7 +207,7 @@ def _check_browser_and_auth(cdp_url: str, provider: str) -> str:
     matters there, and this project's own established rule is never to
     poll a live Dice page more than necessary)."""
     try:
-        playwright, page = _connect_for_provider(cdp_url, provider)
+        playwright, page = _connect_for_provider(cdp_url, provider, candidate_id)
     except Exception:
         return "BROWSER_DISCONNECTED"
     try:
@@ -345,7 +353,7 @@ def run_daemon(
                 # recover/heartbeat pattern as a fresh run below.
                 try:
                     playwright, page = _connect_with_recovery(
-                        cdp_url, provider, max_attempts=max_recovery_attempts, backoff_seconds=recovery_backoff_seconds
+                        cdp_url, provider, candidate_id, max_attempts=max_recovery_attempts, backoff_seconds=recovery_backoff_seconds
                     )
                 except Exception:
                     last_status = "BROWSER_DISCONNECTED"
@@ -378,7 +386,7 @@ def run_daemon(
 
             now = time.monotonic()
             if now - last_check_at >= auth_check_interval:
-                last_status = _check_browser_and_auth(cdp_url, provider)
+                last_status = _check_browser_and_auth(cdp_url, provider, candidate_id)
                 last_check_at = now
             run_registry.write_heartbeat(worker_id, status=last_status)
             time.sleep(poll_interval)
@@ -388,7 +396,7 @@ def run_daemon(
 
         try:
             playwright, page = _connect_with_recovery(
-                cdp_url, provider, max_attempts=max_recovery_attempts, backoff_seconds=recovery_backoff_seconds
+                cdp_url, provider, run["candidate_id"], max_attempts=max_recovery_attempts, backoff_seconds=recovery_backoff_seconds
             )
         except Exception:
             last_status = "BROWSER_DISCONNECTED"

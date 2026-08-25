@@ -78,13 +78,50 @@ def stop_session(stop_url: str) -> None:
 
 
 def load_dice_cookies() -> list[dict] | None:
-    """The candidate's persisted Dice login. Returns None if not
-    configured -- the caller must treat an unauthenticated session as
-    AUTH_REQUIRED, never a crash and never a reason to guess/bypass."""
+    """The single-global-account cookie set (pre-Phase-M8B). Kept only as
+    the explicit, opt-in dev fallback inside load_dice_cookies_for_
+    candidate() below -- no production call site should call this
+    directly anymore. Returns None if not configured."""
     raw = os.environ.get(DICE_COOKIES_ENV_VAR)
     if not raw:
         return None
     return json.loads(raw)
+
+
+_DEV_FALLBACK_ENV_VAR = "DICEPILOT_ALLOW_GLOBAL_DICE_COOKIES_FALLBACK"
+
+
+def load_dice_cookies_for_candidate(candidate_id: str) -> list[dict] | None:
+    """Phase M8B: the one production entrypoint for loading Dice auth --
+    always candidate-scoped (db.dice_auth_state_repository, Vault-backed).
+    Returns None (never another candidate's cookies, never a silent
+    substitution) if this candidate has no ACTIVE auth state.
+
+    The old global DICE_AUTH_COOKIES_JSON is reachable ONLY when
+    DICEPILOT_ALLOW_GLOBAL_DICE_COOKIES_FALLBACK is explicitly set --
+    unset in every real deployment, so a production multi-user run can
+    never activate it by accident. When it does fire, this logs plainly
+    that dev-fallback mode is active (never the cookie values
+    themselves)."""
+    import logging
+
+    from db.dice_auth_state_repository import get_auth_state
+
+    raw = get_auth_state(candidate_id)
+    if raw:
+        return json.loads(raw)
+
+    if os.environ.get(_DEV_FALLBACK_ENV_VAR) == "true":
+        logging.getLogger(__name__).warning(
+            "DEV MODE: candidate %s has no candidate-scoped Dice auth state -- "
+            "falling back to the global DICE_AUTH_COOKIES_JSON dev fallback "
+            "(DICEPILOT_ALLOW_GLOBAL_DICE_COOKIES_FALLBACK=true). Never expect "
+            "this in a production multi-user run.",
+            candidate_id,
+        )
+        return load_dice_cookies()
+
+    return None
 
 
 def to_playwright_cookies(raw_cookies: list[dict]) -> list[dict]:

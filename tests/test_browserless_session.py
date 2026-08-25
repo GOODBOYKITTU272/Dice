@@ -97,6 +97,95 @@ def test_load_dice_cookies_parses_the_env_var(monkeypatch):
     assert result == cookies
 
 
+# ── Phase M8B: candidate-scoped Dice auth (replaces the global cookie
+# var as the production path) -- fully offline, db.dice_auth_state_
+# repository.get_auth_state is monkeypatched, never a real RPC call.
+
+
+def test_load_dice_cookies_for_candidate_uses_candidate_scoped_state(monkeypatch):
+    import db.dice_auth_state_repository as repo
+
+    seen_candidate_ids = []
+    cookies = [{"name": "identity", "value": "candidate-a-cookie"}]
+
+    def fake_get_auth_state(candidate_id):
+        seen_candidate_ids.append(candidate_id)
+        return json.dumps(cookies)
+
+    monkeypatch.setattr(repo, "get_auth_state", fake_get_auth_state)
+    monkeypatch.delenv(bs._DEV_FALLBACK_ENV_VAR, raising=False)
+
+    result = bs.load_dice_cookies_for_candidate("candidate-a")
+
+    assert result == cookies
+    assert seen_candidate_ids == ["candidate-a"]
+
+
+def test_load_dice_cookies_for_candidate_returns_none_without_state_or_fallback(monkeypatch):
+    import db.dice_auth_state_repository as repo
+
+    monkeypatch.setattr(repo, "get_auth_state", lambda candidate_id: None)
+    monkeypatch.delenv(bs._DEV_FALLBACK_ENV_VAR, raising=False)
+    monkeypatch.delenv("DICE_AUTH_COOKIES_JSON", raising=False)
+
+    assert bs.load_dice_cookies_for_candidate("candidate-a") is None
+
+
+def test_load_dice_cookies_for_candidate_dev_fallback_inactive_by_default(monkeypatch):
+    """Even with global cookies configured, they must NOT be used for a
+    candidate with no state of their own unless the fallback flag is
+    explicitly set -- the exact production-multi-user-safety property
+    this phase exists to guarantee."""
+    import db.dice_auth_state_repository as repo
+
+    monkeypatch.setattr(repo, "get_auth_state", lambda candidate_id: None)
+    monkeypatch.delenv(bs._DEV_FALLBACK_ENV_VAR, raising=False)
+    monkeypatch.setenv("DICE_AUTH_COOKIES_JSON", json.dumps([{"name": "global"}]))
+
+    assert bs.load_dice_cookies_for_candidate("candidate-a") is None
+
+
+def test_load_dice_cookies_for_candidate_dev_fallback_activates_when_flag_set(monkeypatch):
+    import db.dice_auth_state_repository as repo
+
+    monkeypatch.setattr(repo, "get_auth_state", lambda candidate_id: None)
+    monkeypatch.setenv(bs._DEV_FALLBACK_ENV_VAR, "true")
+    global_cookies = [{"name": "global"}]
+    monkeypatch.setenv("DICE_AUTH_COOKIES_JSON", json.dumps(global_cookies))
+
+    result = bs.load_dice_cookies_for_candidate("candidate-a")
+
+    assert result == global_cookies
+
+
+def test_load_dice_cookies_for_candidate_dev_fallback_log_never_contains_cookie_values(monkeypatch, caplog):
+    import logging
+
+    import db.dice_auth_state_repository as repo
+
+    monkeypatch.setattr(repo, "get_auth_state", lambda candidate_id: None)
+    monkeypatch.setenv(bs._DEV_FALLBACK_ENV_VAR, "true")
+    secret_cookie_value = "unique-secret-cookie-value-must-never-be-logged"
+    monkeypatch.setenv("DICE_AUTH_COOKIES_JSON", json.dumps([{"name": "session", "value": secret_cookie_value}]))
+
+    with caplog.at_level(logging.WARNING):
+        bs.load_dice_cookies_for_candidate("candidate-a")
+
+    assert secret_cookie_value not in caplog.text
+
+
+def test_load_dice_cookies_for_candidate_never_returns_a_different_candidates_cookies(monkeypatch):
+    import db.dice_auth_state_repository as repo
+
+    store = {"candidate-a": json.dumps([{"name": "cookie-a"}]), "candidate-b": json.dumps([{"name": "cookie-b"}])}
+    monkeypatch.setattr(repo, "get_auth_state", lambda candidate_id: store.get(candidate_id))
+    monkeypatch.delenv(bs._DEV_FALLBACK_ENV_VAR, raising=False)
+
+    assert bs.load_dice_cookies_for_candidate("candidate-a") == [{"name": "cookie-a"}]
+    assert bs.load_dice_cookies_for_candidate("candidate-b") == [{"name": "cookie-b"}]
+    assert bs.load_dice_cookies_for_candidate("candidate-c") is None
+
+
 def test_to_playwright_cookies_maps_same_site_values():
     raw = [
         {"name": "a", "value": "1", "domain": ".dice.com", "path": "/", "secure": True, "httpOnly": False, "sameSite": "no_restriction", "expirationDate": 100},

@@ -194,7 +194,7 @@ def test_daemon_claims_and_processes_exactly_one_run_per_poll(monkeypatch):
     monkeypatch.setattr(run_registry, "claim_next_pending_run", _fake_claim)
     monkeypatch.setattr(worker_daemon, "run_worker_for_run", lambda page, run_id, *a, **kw: seen_run_ids.append(run_id))
     monkeypatch.setattr(worker_daemon, "_connect", _fake_connect)
-    monkeypatch.setattr(worker_daemon, "_check_browser_and_auth", lambda cdp_url, provider: "ONLINE")
+    monkeypatch.setattr(worker_daemon, "_check_browser_and_auth", lambda cdp_url, provider, candidate_id=None: "ONLINE")
     try:
         worker_daemon.run_daemon(worker_id, max_iterations=2, poll_interval=0, auth_check_interval=0)
         assert claim_calls == [worker_id, worker_id]  # polled twice
@@ -208,10 +208,10 @@ def test_daemon_writes_heartbeat_on_idle_poll(monkeypatch):
     worker_id = f"TEST-worker-{uuid.uuid4()}"
     monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", CANDIDATE)
     monkeypatch.setattr(run_registry, "claim_next_pending_run", lambda wid, cid: None)
-    monkeypatch.setattr(worker_daemon, "_check_browser_and_auth", lambda cdp_url, provider: "ONLINE")
+    monkeypatch.setattr(worker_daemon, "_check_browser_and_auth", lambda cdp_url, provider, candidate_id=None: "ONLINE")
     try:
         worker_daemon.run_daemon(worker_id, max_iterations=1, poll_interval=0, auth_check_interval=0)
-        hb = run_registry.get_latest_heartbeat()
+        hb = run_registry.get_latest_heartbeat(worker_id=worker_id)
         assert hb["worker_id"] == worker_id
         assert hb["status"] == "ONLINE"
     finally:
@@ -253,7 +253,7 @@ def test_daemon_reports_browser_disconnected_and_hands_run_back_to_pending(monke
     try:
         worker_daemon.run_daemon(worker_id, max_iterations=1, poll_interval=0, recovery_backoff_seconds=0)
 
-        hb = run_registry.get_latest_heartbeat()
+        hb = run_registry.get_latest_heartbeat(worker_id=worker_id)
         assert hb["worker_id"] == worker_id
         assert hb["status"] == "BROWSER_DISCONNECTED"
         assert status_updates == [(fake_run["id"], "PENDING")]  # handed back, never silently consumed

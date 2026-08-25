@@ -170,17 +170,22 @@ def test_run_progress_shows_dice_login_required():
         _cleanup_heartbeats(worker_id)
 
 
-def test_run_progress_shows_security_challenge():
-    worker_id = f"TEST-worker-{uuid.uuid4()}"
+def test_run_progress_shows_security_challenge(monkeypatch):
+    """Monkeypatches run_registry.worker_status directly rather than
+    relying on a real heartbeat write winning a "latest" race -- the
+    real production worker (dice-worker) heartbeats continuously during
+    a full local test run, so an unscoped worker_status() call (what
+    local_app.queries.run_progress uses, correctly, for its single-
+    worker-per-candidate production display) could otherwise pick up
+    the real worker's ONLINE status instead of this test's own."""
     job, app_ = _make_job_and_application("TEST Cloud SecurityChallenge")
     run = run_registry.create_run([app_["id"]], candidate_id=CANDIDATE, submission_policy="AUTHORIZED_AUTONOMOUS")
     try:
-        run_registry.write_heartbeat(worker_id, status="SECURITY_CHALLENGE")
+        monkeypatch.setattr(run_registry, "worker_status", lambda *a, **kw: {"online": True, "status": "SECURITY_CHALLENGE"})
         body = _client().get(f"/runs/{run['id']}").get_data(as_text=True)
         assert "Security Challenge" in body
     finally:
         _cleanup(job["id"])
-        _cleanup_heartbeats(worker_id)
 
 
 # 11. Stale run lease recovery -- a run stuck RUNNING with a dead worker

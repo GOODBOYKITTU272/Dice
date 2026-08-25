@@ -215,7 +215,7 @@ def test_ensure_steel_session_zero_bind_address_in_response_is_never_used_as_con
 def test_connect_with_recovery_retries_bounded_then_succeeds(monkeypatch):
     attempts = []
 
-    def _flaky_connect(cdp_url, provider):
+    def _flaky_connect(cdp_url, provider, candidate_id=None):
         attempts.append(1)
         if len(attempts) < 3:
             raise ConnectionError("not ready yet")
@@ -230,7 +230,7 @@ def test_connect_with_recovery_retries_bounded_then_succeeds(monkeypatch):
 def test_connect_with_recovery_gives_up_after_max_attempts(monkeypatch):
     attempts = []
 
-    def _always_fails(cdp_url, provider):
+    def _always_fails(cdp_url, provider, candidate_id=None):
         attempts.append(1)
         raise ConnectionError("still down")
 
@@ -288,7 +288,7 @@ class _FakePlaywright:
 
 
 def test_check_browser_and_auth_reports_online_when_authenticated(monkeypatch):
-    monkeypatch.setattr(worker_daemon, "_connect_for_provider", lambda cdp_url, provider: (_FakePlaywright(), _FakePage()))
+    monkeypatch.setattr(worker_daemon, "_connect_for_provider", lambda cdp_url, provider, candidate_id=None: (_FakePlaywright(), _FakePage()))
     import dice_browser.session as session_mod
     from dice_browser.models import BrowserState
 
@@ -298,7 +298,7 @@ def test_check_browser_and_auth_reports_online_when_authenticated(monkeypatch):
 
 
 def test_check_browser_and_auth_reports_auth_required_when_logged_out(monkeypatch):
-    monkeypatch.setattr(worker_daemon, "_connect_for_provider", lambda cdp_url, provider: (_FakePlaywright(), _FakePage()))
+    monkeypatch.setattr(worker_daemon, "_connect_for_provider", lambda cdp_url, provider, candidate_id=None: (_FakePlaywright(), _FakePage()))
     import dice_browser.session as session_mod
     from dice_browser.models import BrowserState
 
@@ -308,7 +308,7 @@ def test_check_browser_and_auth_reports_auth_required_when_logged_out(monkeypatc
 
 
 def test_check_browser_and_auth_reports_security_challenge(monkeypatch):
-    monkeypatch.setattr(worker_daemon, "_connect_for_provider", lambda cdp_url, provider: (_FakePlaywright(), _FakePage()))
+    monkeypatch.setattr(worker_daemon, "_connect_for_provider", lambda cdp_url, provider, candidate_id=None: (_FakePlaywright(), _FakePage()))
     import dice_browser.session as session_mod
     from dice_browser.models import ChallengeType
 
@@ -317,7 +317,7 @@ def test_check_browser_and_auth_reports_security_challenge(monkeypatch):
 
 
 def test_check_browser_and_auth_reports_disconnected_when_connect_fails(monkeypatch):
-    def _boom(cdp_url, provider):
+    def _boom(cdp_url, provider, candidate_id=None):
         raise ConnectionError("no session")
 
     monkeypatch.setattr(worker_daemon, "_connect_for_provider", _boom)
