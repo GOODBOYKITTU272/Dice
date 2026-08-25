@@ -157,17 +157,18 @@ def test_worker_status_surfaces_browser_disconnected_while_online():
         _cleanup_heartbeats(worker_id)
 
 
-def test_run_progress_shows_dice_login_required():
-    worker_id = f"TEST-worker-{uuid.uuid4()}"
+def test_run_progress_shows_dice_login_required(monkeypatch):
+    """Monkeypatches run_registry.worker_status directly rather than
+    relying on a real heartbeat write winning a "latest" race -- see
+    test_run_progress_shows_security_challenge's own docstring for why."""
     job, app_ = _make_job_and_application("TEST Cloud AuthRequired")
     run = run_registry.create_run([app_["id"]], candidate_id=CANDIDATE, submission_policy="AUTHORIZED_AUTONOMOUS")
     try:
-        run_registry.write_heartbeat(worker_id, status="AUTH_REQUIRED")
+        monkeypatch.setattr(run_registry, "worker_status", lambda *a, **kw: {"online": True, "status": "AUTH_REQUIRED"})
         body = _client().get(f"/runs/{run['id']}").get_data(as_text=True)
         assert "Dice Login Required" in body
     finally:
         _cleanup(job["id"])
-        _cleanup_heartbeats(worker_id)
 
 
 def test_run_progress_shows_security_challenge(monkeypatch):
