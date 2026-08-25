@@ -150,7 +150,7 @@ def test_worker_status_surfaces_browser_disconnected_while_online():
     worker_id = f"TEST-worker-{uuid.uuid4()}"
     try:
         run_registry.write_heartbeat(worker_id, status="BROWSER_DISCONNECTED")
-        status = run_registry.worker_status()
+        status = run_registry.worker_status(worker_id=worker_id)
         assert status["online"] is True
         assert status["status"] == "BROWSER_DISCONNECTED"
     finally:

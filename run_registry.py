@@ -59,13 +59,20 @@ def get_run(run_id: str) -> dict[str, Any]:
     return _to_run_dict(rows[0], application_ids)
 
 
-def claim_next_pending_run(worker_id: str) -> dict[str, Any] | None:
-    """Atomic: claims the oldest PENDING run (FOR UPDATE SKIP LOCKED,
-    server-side), stamping claimed_by/claimed_at and moving it to
-    RUNNING. Returns None when nothing is PENDING -- the daemon's normal
-    "nothing to do yet" case, not an error."""
+def claim_next_pending_run(worker_id: str, candidate_id: str) -> dict[str, Any] | None:
+    """Atomic: claims the oldest PENDING run for THIS candidate (FOR
+    UPDATE SKIP LOCKED, server-side), stamping claimed_by/claimed_at and
+    moving it to RUNNING. Returns None when nothing is PENDING -- the
+    daemon's normal "nothing to do yet" case, not an error.
+
+    Real gap, live-found 2026-08-25: the RPC previously took no
+    candidate_id at all and claimed the globally-oldest PENDING run
+    regardless of owner -- masked in V1 (one real candidate in
+    practice), but it meant the real production worker was silently
+    claiming test-created runs mid-suite. Scoped the same way
+    claim_next_queued_application() already is."""
     client = get_supabase_client()
-    rows = client.rpc("claim_next_pending_run", {"p_worker_id": worker_id}).execute().data
+    rows = client.rpc("claim_next_pending_run", {"p_worker_id": worker_id, "p_candidate_id": candidate_id}).execute().data
     if not rows:
         return None
     application_ids = _application_ids_for_run(client, rows[0]["id"])
@@ -138,13 +145,25 @@ def write_heartbeat(worker_id: str, status: str = "ONLINE") -> dict[str, Any]:
     )
 
 
-def get_latest_heartbeat() -> dict[str, Any] | None:
+def get_latest_heartbeat(worker_id: str | None = None) -> dict[str, Any] | None:
+    """worker_id, when given, scopes to that one worker's own row
+    instead of the globally most-recent heartbeat across every worker
+    that's ever run. Production (V1, one real worker) never passes this
+    -- "global latest" is the correct, intended semantic there. Tests
+    pass their own synthetic worker_id so the real production worker's
+    genuinely-fresher heartbeat can never mask what a test is actually
+    trying to verify (a real gap, live-found 2026-08-25: this exact
+    unscoped query made every heartbeat-staleness test nondeterministic
+    once a real worker was continuously running)."""
     client = get_supabase_client()
-    rows = client.table("worker_heartbeats").select("*").order("last_heartbeat_at", desc=True).limit(1).execute().data
+    query = client.table("worker_heartbeats").select("*")
+    if worker_id is not None:
+        query = query.eq("worker_id", worker_id)
+    rows = query.order("last_heartbeat_at", desc=True).limit(1).execute().data
     return rows[0] if rows else None
 
 
-def worker_status(max_age_seconds: int = 30) -> dict[str, Any]:
+def worker_status(max_age_seconds: int = 30, worker_id: str | None = None) -> dict[str, Any]:
     """Used by the Run Progress and Worker pages. Never assumes a worker
     process is alive just because the web app itself is reachable --
     "online" means the daemon PROCESS is up and heartbeating, nothing
@@ -156,8 +175,11 @@ def worker_status(max_age_seconds: int = 30) -> dict[str, Any]:
     BROWSER_DISCONNECTED, AUTH_REQUIRED, or SECURITY_CHALLENGE when
     online, else the synthetic OFFLINE when the heartbeat itself has
     gone stale or never existed -- so the frontend can show "Dice Login
-    Required" or "Security Challenge" distinctly from a dead worker."""
-    hb = get_latest_heartbeat()
+    Required" or "Security Challenge" distinctly from a dead worker.
+
+    worker_id: see get_latest_heartbeat() -- test-only scoping, never
+    passed by real production callers."""
+    hb = get_latest_heartbeat(worker_id)
     if hb is None:
         return {"online": False, "status": "OFFLINE", "last_heartbeat_at": None, "age_seconds": None}
     last_raw = hb["last_heartbeat_at"]

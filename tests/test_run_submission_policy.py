@@ -128,7 +128,7 @@ def test_daemon_uses_autonomous_run_own_policy_with_no_cli_override(monkeypatch)
     fake_run = {"id": "TEST-fake-run-auto", "candidate_id": CANDIDATE, "submission_policy": "AUTHORIZED_AUTONOMOUS", "application_ids": []}
     captured = {}
 
-    monkeypatch.setattr(run_registry, "claim_next_pending_run", lambda wid: fake_run)
+    monkeypatch.setattr(run_registry, "claim_next_pending_run", lambda wid, cid: fake_run)
     monkeypatch.setattr(worker_daemon, "run_worker_for_run", lambda page, run_id, wid, submission_policy, resume_path: captured.update(policy=submission_policy))
     monkeypatch.setattr(worker_daemon, "_connect", _fake_connect)
     try:
@@ -144,7 +144,7 @@ def test_daemon_uses_confirmation_run_own_policy_with_no_cli_override(monkeypatc
     fake_run = {"id": "TEST-fake-run-confirm", "candidate_id": CANDIDATE, "submission_policy": "REQUIRE_CONFIRMATION", "application_ids": []}
     captured = {}
 
-    monkeypatch.setattr(run_registry, "claim_next_pending_run", lambda wid: fake_run)
+    monkeypatch.setattr(run_registry, "claim_next_pending_run", lambda wid, cid: fake_run)
     monkeypatch.setattr(worker_daemon, "run_worker_for_run", lambda page, run_id, wid, submission_policy, resume_path: captured.update(policy=submission_policy))
     monkeypatch.setattr(worker_daemon, "_connect", _fake_connect)
     try:
@@ -158,12 +158,13 @@ def test_daemon_uses_confirmation_run_own_policy_with_no_cli_override(monkeypatc
 # policies -- each with ITS OWN stored value, not a shared default.
 def test_daemon_processes_mixed_policy_runs_correctly_in_one_invocation(monkeypatch):
     worker_id = f"TEST-worker-{uuid.uuid4()}"
+    monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", CANDIDATE)
     queue = [
         {"id": "TEST-fake-run-mixed-1", "candidate_id": CANDIDATE, "submission_policy": "AUTHORIZED_AUTONOMOUS", "application_ids": []},
         {"id": "TEST-fake-run-mixed-2", "candidate_id": CANDIDATE, "submission_policy": "REQUIRE_CONFIRMATION", "application_ids": []},
     ]
 
-    def _fake_claim(wid):
+    def _fake_claim(wid, cid):
         return queue.pop(0) if queue else None
 
     seen = []
@@ -189,12 +190,13 @@ def test_daemon_cli_override_applies_to_every_claimed_run_debug_only(monkeypatch
     # DOES apply uniformly (that's its whole purpose), unlike the normal,
     # no-override path which reads each run's own stored value.
     worker_id = f"TEST-worker-{uuid.uuid4()}"
+    monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", CANDIDATE)
     queue = [
         {"id": "TEST-fake-run-ov-1", "candidate_id": CANDIDATE, "submission_policy": "REQUIRE_CONFIRMATION", "application_ids": []},
         {"id": "TEST-fake-run-ov-2", "candidate_id": CANDIDATE, "submission_policy": "REQUIRE_CONFIRMATION", "application_ids": []},
     ]
 
-    def _fake_claim(wid):
+    def _fake_claim(wid, cid):
         return queue.pop(0) if queue else None
 
     seen = []

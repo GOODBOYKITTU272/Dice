@@ -182,10 +182,11 @@ def test_run_preserves_selection_order():
 # queued_application_for_run's tests in test_worker_run.py.
 def test_daemon_claims_and_processes_exactly_one_run_per_poll(monkeypatch):
     worker_id = f"TEST-worker-{uuid.uuid4()}"
+    monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", CANDIDATE)
     fake_run = {"id": "TEST-fake-run-1", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": [], "submission_policy": "REQUIRE_CONFIRMATION"}
     claim_calls = []
 
-    def _fake_claim(wid):
+    def _fake_claim(wid, cid):
         claim_calls.append(wid)
         return fake_run if len(claim_calls) == 1 else None
 
@@ -205,7 +206,8 @@ def test_daemon_claims_and_processes_exactly_one_run_per_poll(monkeypatch):
 # 8. Heartbeat written (idle poll, nothing PENDING)
 def test_daemon_writes_heartbeat_on_idle_poll(monkeypatch):
     worker_id = f"TEST-worker-{uuid.uuid4()}"
-    monkeypatch.setattr(run_registry, "claim_next_pending_run", lambda wid: None)
+    monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", CANDIDATE)
+    monkeypatch.setattr(run_registry, "claim_next_pending_run", lambda wid, cid: None)
     monkeypatch.setattr(worker_daemon, "_check_browser_and_auth", lambda cdp_url, provider: "ONLINE")
     try:
         worker_daemon.run_daemon(worker_id, max_iterations=1, poll_interval=0, auth_check_interval=0)
@@ -224,7 +226,7 @@ def test_worker_offline_detected_when_heartbeat_stale():
         get_supabase_client().table("worker_heartbeats").insert(
             {"worker_id": worker_id, "status": "ONLINE", "last_heartbeat_at": stale}
         ).execute()
-        status = run_registry.worker_status(max_age_seconds=30)
+        status = run_registry.worker_status(max_age_seconds=30, worker_id=worker_id)
         assert status["online"] is False
         assert status["status"] == "OFFLINE"
     finally:
@@ -238,13 +240,14 @@ def test_worker_offline_detected_when_heartbeat_stale():
 # for why this must never touch the shared live application_runs table.
 def test_daemon_reports_browser_disconnected_and_hands_run_back_to_pending(monkeypatch):
     worker_id = f"TEST-worker-{uuid.uuid4()}"
+    monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", CANDIDATE)
     fake_run = {"id": "TEST-fake-run-2", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": [], "submission_policy": "REQUIRE_CONFIRMATION"}
     status_updates = []
 
     def _boom(cdp_url):
         raise ConnectionError("no CDP endpoint reachable")
 
-    monkeypatch.setattr(run_registry, "claim_next_pending_run", lambda wid: fake_run)
+    monkeypatch.setattr(run_registry, "claim_next_pending_run", lambda wid, cid: fake_run)
     monkeypatch.setattr(run_registry, "update_run_status", lambda run_id, status: status_updates.append((run_id, status)))
     monkeypatch.setattr(worker_daemon, "_connect", _boom)
     try:
@@ -333,12 +336,13 @@ def test_submitted_persisted_and_duplicate_submit_rejected():
 def test_daemon_restart_across_two_separate_invocations_is_safe(monkeypatch):
     worker_id_1 = f"TEST-worker-{uuid.uuid4()}"
     worker_id_2 = f"TEST-worker-{uuid.uuid4()}"
+    monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", CANDIDATE)
     queue = [
         {"id": "TEST-fake-run-restart-1", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": [], "submission_policy": "REQUIRE_CONFIRMATION"},
         {"id": "TEST-fake-run-restart-2", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": [], "submission_policy": "REQUIRE_CONFIRMATION"},
     ]
 
-    def _fake_claim(wid):
+    def _fake_claim(wid, cid):
         return queue.pop(0) if queue else None
 
     seen = []

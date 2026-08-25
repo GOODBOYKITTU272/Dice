@@ -364,10 +364,11 @@ def test_reconcile_run_after_disconnect_never_retries_post_submit_boundary():
 # never blind-retried, and writes a RECOVERING heartbeat on the way.
 def test_daemon_recovers_from_mid_run_disconnect_without_crashing(monkeypatch):
     worker_id = f"TEST-worker-{uuid.uuid4()}"
+    monkeypatch.setenv("DICEPILOT_CANDIDATE_ID", CANDIDATE)
     fake_run = {"id": "TEST-fake-run-steel", "candidate_id": CANDIDATE, "status": "RUNNING", "application_ids": [], "submission_policy": "REQUIRE_CONFIRMATION"}
     reconcile_calls = []
 
-    def _fake_claim(wid):
+    def _fake_claim(wid, cid):
         return fake_run if not reconcile_calls else None
 
     def _boom_run(page, run_id, *a, **kw):

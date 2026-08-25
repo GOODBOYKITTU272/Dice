@@ -326,15 +326,15 @@ def run_daemon(
     duplicate Submit ever possible from this path."""
     cdp_url = cdp_url or default_cdp_url()
     provider = provider or resolve_browser_provider()
+    candidate_id = os.environ.get("DICEPILOT_CANDIDATE_ID")
     last_status = "ONLINE"
     last_check_at = 0.0
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
         iterations += 1
 
-        run = run_registry.claim_next_pending_run(worker_id)
+        run = run_registry.claim_next_pending_run(worker_id, candidate_id) if candidate_id else None
         if run is None:
-            candidate_id = os.environ.get("DICEPILOT_CANDIDATE_ID")
             resumable = _find_resumable_application(candidate_id) if candidate_id else None
             if resumable is not None:
                 # Every open intervention on this application was already
