@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 
+import run_registry
 import readiness
 from db import dice_auth_health_repository
 from db.application_repository import create_job_offer, upsert_dice_job
@@ -274,6 +275,14 @@ class _FakeProvider:
         self.sent.append(("job_offer", application["id"]))
         return f"msg-{len(self.sent)}"
 
+    def send_reconnect_required(self, application_id):
+        self.sent.append(("reconnect_required", application_id))
+        return f"msg-{len(self.sent)}"
+
+    def send_reconnect_success(self, application, job):
+        self.sent.append(("reconnect_success", application["id"]))
+        return f"msg-{len(self.sent)}"
+
 
 # 7. healthy readiness -> offer created, AWAITING_USER_DECISION, notification sent
 def test_offer_job_if_ready_sends_real_offer_when_offerable(monkeypatch):
@@ -398,3 +407,153 @@ def test_offer_job_if_ready_never_creates_a_real_browser_session(monkeypatch):
     result = readiness.offer_job_if_ready(provider, candidate_id, job["id"])
 
     assert result["offered"] is True
+
+
+# ── Phase 8D: reconnect_dice / _resume_interrupted_applications ─────────
+
+
+def _make_authorized_interrupted_application(candidate_id, submission_policy="AUTHORIZED_AUTONOMOUS"):
+    """A job the candidate already tapped Apply on, that then hit a
+    genuine (post-retry) AUTH_REQUIRED -- QUEUED -> PROCESSING ->
+    FAILED_RETRYABLE, with a real run at the given submission_policy,
+    matching exactly what worker._fail() leaves behind."""
+    job = _make_job()
+    app = create_job_offer(candidate_id, job["id"])
+    client = get_supabase_client()
+    client.table("applications").update({"status": "QUEUED"}).eq("id", app["id"]).execute()
+    run = run_registry.create_run([app["id"]], candidate_id, submission_policy=submission_policy)
+    client.table("applications").update({"status": "PROCESSING", "run_id": run["id"]}).eq("id", app["id"]).execute()
+    client.table("applications").update({"status": "FAILED_RETRYABLE", "error_code": "AUTH_REQUIRED", "error_message": "not authenticated on live re-check"}).eq("id", app["id"]).execute()
+    return app, job
+
+
+# distinguishes authorized-interrupted (resumed) from held-not-yet-offered (untouched)
+def test_resume_interrupted_applications_resumes_authorized_not_held(monkeypatch):
+    candidate_id = _make_candidate_with_healthy_auth()
+    interrupted, _ = _make_authorized_interrupted_application(candidate_id)
+    held_job = _make_job()
+    held = create_job_offer(candidate_id, held_job["id"])  # AWAITING_USER_DECISION -- never authorized
+    provider = _FakeProvider()
+
+    resumed = readiness._resume_interrupted_applications(provider, candidate_id)
+
+    assert resumed == [interrupted["id"]]
+    client = get_supabase_client()
+    interrupted_after = client.table("applications").select("status,run_id").eq("id", interrupted["id"]).execute().data[0]
+    assert interrupted_after["status"] == "QUEUED"
+    assert interrupted_after["run_id"] is not None
+    held_after = client.table("applications").select("status").eq("id", held["id"]).execute().data[0]
+    assert held_after["status"] == "AWAITING_USER_DECISION"  # untouched -- never auto-blasted
+    assert provider.sent == [("reconnect_success", interrupted["id"])]
+
+
+def test_resume_interrupted_applications_preserves_original_submission_policy():
+    candidate_id = _make_candidate_with_healthy_auth()
+    interrupted, _ = _make_authorized_interrupted_application(candidate_id, submission_policy="REQUIRE_CONFIRMATION")
+    provider = _FakeProvider()
+
+    readiness._resume_interrupted_applications(provider, candidate_id)
+
+    client = get_supabase_client()
+    new_run_id = client.table("applications").select("run_id").eq("id", interrupted["id"]).execute().data[0]["run_id"]
+    new_run = run_registry.get_run(new_run_id)
+    assert new_run["submission_policy"] == "REQUIRE_CONFIRMATION"  # never silently upgraded to autonomous
+
+
+def test_resume_interrupted_applications_none_when_nothing_stuck():
+    candidate_id = _make_candidate_with_healthy_auth()
+    provider = _FakeProvider()
+    assert readiness._resume_interrupted_applications(provider, candidate_id) == []
+    assert provider.sent == []
+
+
+def test_reconnect_dice_returns_not_reconnected_when_no_cookies_configured(monkeypatch):
+    monkeypatch.delenv("DICE_AUTH_COOKIES_JSON", raising=False)
+    result = readiness.reconnect_dice(_FakeProvider(), str(uuid.uuid4()))
+    assert result["reconnected"] is False
+
+
+def _nav_result_stub(authenticated: bool, evidence: str):
+    from dice_browser.models import NavigationResult, BrowserState
+
+    return NavigationResult(
+        canonical_url="https://www.dice.com/job-detail/stub",
+        page_title="",
+        browser_state=BrowserState.ACTIVE if authenticated else BrowserState.AUTH_REQUIRED,
+        authenticated=authenticated,
+        already_applied=None,
+        easy_apply_visible=None,
+        challenge_type=None,
+        evidence=evidence,
+    )
+
+
+class _FakeBrowser:
+    contexts = []
+
+    def new_context(self):
+        return self
+
+    def add_cookies(self, cookies):
+        pass
+
+    def new_page(self):
+        return object()
+
+    def close(self):
+        pass
+
+
+class _FakePlaywrightCM:
+    def __enter__(self):
+        class _P:
+            class chromium:
+                @staticmethod
+                def connect_over_cdp(url):
+                    return _FakeBrowser()
+
+        return _P()
+
+    def __exit__(self, *a):
+        return False
+
+
+def _patch_fake_browserless(monkeypatch, nav_result):
+    import dice_browser.browserless_session as browserless_session
+    import dice_browser.navigator as navigator
+
+    monkeypatch.setenv("DICE_AUTH_COOKIES_JSON", '[{"name": "access", "value": "x", "domain": ".dice.com", "path": "/", "secure": true, "httpOnly": false, "sameSite": "lax", "expirationDate": 9999999999}]')
+    monkeypatch.setattr(browserless_session, "create_session", lambda **kw: {"connect": "ws://fake", "stop": "http://fake/stop"})
+    monkeypatch.setattr(browserless_session, "stop_session", lambda url: None)
+    monkeypatch.setattr(navigator, "open_job", lambda page, url: nav_result)
+    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: _FakePlaywrightCM())
+
+
+def test_reconnect_dice_resumes_only_when_final_auth_active(monkeypatch):
+    candidate_id = _make_candidate_with_healthy_auth()
+    interrupted, _ = _make_authorized_interrupted_application(candidate_id)
+    provider = _FakeProvider()
+    _patch_fake_browserless(monkeypatch, _nav_result_stub(authenticated=True, evidence="ACTIVE"))
+
+    result = readiness.reconnect_dice(provider, candidate_id)
+
+    assert result["reconnected"] is True
+    assert result["resumed_application_ids"] == [interrupted["id"]]
+    health = dice_auth_health_repository.get_auth_health(candidate_id)
+    assert health["is_healthy"] is True
+
+
+def test_reconnect_dice_does_not_resume_when_still_auth_required(monkeypatch):
+    candidate_id = _make_candidate_with_healthy_auth()
+    interrupted, _ = _make_authorized_interrupted_application(candidate_id)
+    provider = _FakeProvider()
+    _patch_fake_browserless(monkeypatch, _nav_result_stub(authenticated=False, evidence="still AUTH_REQUIRED after reload retry"))
+
+    result = readiness.reconnect_dice(provider, candidate_id)
+
+    assert result["reconnected"] is False
+    client = get_supabase_client()
+    still_stuck = client.table("applications").select("status").eq("id", interrupted["id"]).execute().data[0]
+    assert still_stuck["status"] == "FAILED_RETRYABLE"  # never touched -- reconnect didn't actually succeed
+    health = dice_auth_health_repository.get_auth_health(candidate_id)
+    assert health["is_healthy"] is False

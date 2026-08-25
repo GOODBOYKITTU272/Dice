@@ -53,6 +53,20 @@ class AttentionProvider(Protocol):
         the associated run's policy is AUTHORIZED_AUTONOMOUS."""
         ...
 
+    def send_reconnect_required(self, application_id: str) -> str:
+        """Phase 8D. Sent once per application+channel when a genuine
+        (post-retry) AUTH_REQUIRED interrupts an already-authorized
+        application -- never for a job that was merely held pre-offer
+        (that one silently never gets an Apply/Skip card at all, no
+        message needed). Never mentions cookies/Browserless/Railway."""
+        ...
+
+    def send_reconnect_success(self, application: dict, job: dict) -> str:
+        """Phase 8D. Sent once reconnect_dice() positively re-verifies
+        Dice ACTIVE and resumes this specific interrupted application --
+        never a new Apply card, never a second authorization."""
+        ...
+
     def parse_inbound(self, raw_event: dict) -> NormalizedEvent:
         """Translates one provider-native inbound event (a Telegram
         update, an iMessage row) into a NormalizedEvent. Never touches

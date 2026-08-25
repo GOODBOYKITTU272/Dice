@@ -50,7 +50,7 @@ from playwright.sync_api import Page
 
 import run_registry
 from attention.routing import send_via_primary_with_fallback
-from attention.service import notify_submission_failure
+from attention.service import notify_reconnect_required, notify_submission_failure
 from db import dice_auth_health_repository
 from db.application_repository import (
     add_event,
@@ -133,8 +133,19 @@ def _fail(application_id: str, status: str, error_code: str, error_message: str)
     # (only a real SUBMITTED ever triggered a message back). Best-effort
     # by design: a notification failure must never mask or override the
     # real DB status transition above, which has already happened.
+    #
+    # Phase 8D: AUTH_REQUIRED specifically -- an already-authorized
+    # application interrupted by a genuine (post-retry) auth loss -- gets
+    # its own distinct "reconnect" message instead of a generic failure.
+    # The application itself is left exactly as FAILED_RETRYABLE already
+    # left it: never permanently FAILED merely for needing login again,
+    # never silently dropped, always resumable once reconnect_dice()
+    # positively re-verifies auth (never a second Apply/authorization).
     try:
-        send_via_primary_with_fallback(application["candidate_id"], notify_submission_failure, application_id, error_message)
+        if error_code == "AUTH_REQUIRED":
+            send_via_primary_with_fallback(application["candidate_id"], notify_reconnect_required, application_id)
+        else:
+            send_via_primary_with_fallback(application["candidate_id"], notify_submission_failure, application_id, error_message)
     except Exception:
         pass
 

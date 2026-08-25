@@ -100,6 +100,27 @@ def notify_submission_failure(provider: AttentionProvider, application_id: str, 
     record_outbound(application_id, application["candidate_id"], provider.channel, MessageType.SUBMISSION_FAILURE.value, external_id)
 
 
+def notify_reconnect_required(provider: AttentionProvider, application_id: str) -> None:
+    """Phase 8D. Idempotent per application+channel (the DB's own
+    partial unique index enforces this regardless) -- a worker retrying
+    the same already-paused application on a later poll must never spam
+    this a second time."""
+    if already_sent_outbound(application_id, provider.channel, MessageType.RECONNECT_REQUIRED.value):
+        return
+    external_id = provider.send_reconnect_required(application_id)
+    application = get_application(application_id)
+    record_outbound(application_id, application["candidate_id"], provider.channel, MessageType.RECONNECT_REQUIRED.value, external_id)
+
+
+def notify_reconnect_success(provider: AttentionProvider, application_id: str) -> None:
+    if already_sent_outbound(application_id, provider.channel, MessageType.RECONNECT_SUCCESS.value):
+        return
+    application = get_application(application_id)
+    job = get_dice_job(application["dice_job_id"])
+    external_id = provider.send_reconnect_success(application, job)
+    record_outbound(application_id, application["candidate_id"], provider.channel, MessageType.RECONNECT_SUCCESS.value, external_id)
+
+
 # ── inbound ─────────────────────────────────────────────────────────────
 
 

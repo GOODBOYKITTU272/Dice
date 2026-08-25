@@ -221,7 +221,12 @@ def test_process_one_application_failure_notifies_bound_candidate(fake_intervent
     failure_sends = [call for call in sent if "sendMessage" in call[0]]
     assert len(failure_sends) == 1
     assert failure_sends[0][1]["chat_id"] == "12345"
-    assert "AUTH_REQUIRED" in failure_sends[0][1]["text"] or "auth" in failure_sends[0][1]["text"].lower()
+    # Phase 8D: AUTH_REQUIRED specifically now sends the distinct
+    # reconnect-required message (never cookies/Browserless/Railway),
+    # not the generic submission-failure copy.
+    assert "reconnect" in failure_sends[0][1]["text"].lower()
+    assert "cookie" not in failure_sends[0][1]["text"].lower()
+    assert "browserless" not in failure_sends[0][1]["text"].lower()
 
 
 # 4. Security challenge stops safely
@@ -232,6 +237,41 @@ def test_process_one_application_security_challenge_stops(fake_intervention_repo
     result = worker.process_one_application(page, CANDIDATE, "test-worker")
     assert result.stop_reason == worker.StopReason.SECURITY_CHALLENGE
     assert app_repo.get_application(app["id"])["status"] == "FAILED_RETRYABLE"
+
+
+# Phase 8D: _fail() only routes to the reconnect-required message for
+# error_code == "AUTH_REQUIRED" specifically -- a different failure type
+# (here, SECURITY_CHALLENGE) must still use the generic submission-
+# failure notification, never be mistaken for a Dice-reconnect case.
+def test_process_one_application_security_challenge_uses_generic_failure_not_reconnect(fake_intervention_repo, page, monkeypatch, request):
+    import requests
+
+    app = _make_queued_application()
+    channel = bind_channel(CANDIDATE, "TELEGRAM", "12345", verified=True)
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+    request.addfinalizer(lambda: get_supabase_client().table("candidate_attention_channels").delete().eq("id", channel["id"]).execute())
+
+    sent = []
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"ok": True, "result": {"message_id": 1}}
+
+    def fake_post(url, json=None, **kw):
+        sent.append((url, json))
+        return _FakeResponse()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr(worker, "open_job", lambda page, url: _nav_result(challenge=ChallengeType.CAPTCHA))
+
+    worker.process_one_application(page, CANDIDATE, "test-worker")
+
+    sends = [call for call in sent if "sendMessage" in call[0]]
+    assert len(sends) == 1
+    assert "reconnect" not in sends[0][1]["text"].lower()
 
 
 # 5. Stale/already-applied job -> FAILED, not retryable

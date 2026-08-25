@@ -16,6 +16,7 @@ from db.supabase_client import get_supabase_client
 _OUTBOUND_ONCE_TYPES = {
     "JOB_OFFER", "SUBMISSION_SUCCESS", "SUBMISSION_FAILURE",
     "APPLY_ACK", "SKIP_ACK", "READY_TO_SUBMIT",
+    "RECONNECT_REQUIRED", "RECONNECT_SUCCESS",
 }
 
 

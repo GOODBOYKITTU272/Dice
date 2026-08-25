@@ -112,6 +112,13 @@ class LoopMessageProvider:
         text = f"Couldn't complete this application.\n\n{job['title']}\n{job.get('company_name') or ''}\n\n{reason}".rstrip()
         return self._send(text)
 
+    def send_reconnect_required(self, application_id: str) -> str:
+        text = "Dice needs to be reconnected.\n\nYour application is saved. Reconnect Dice and I'll continue automatically."
+        return self._send(text)
+
+    def send_reconnect_success(self, application: dict, job: dict) -> str:
+        return self._send(f"Dice connected. I'm continuing your application for {job['title']} now.")
+
     def parse_inbound(self, raw_event: dict) -> NormalizedEvent:
         """raw_event is one LoopMessage webhook payload --
         {"event": "message_inbound", "contact", "text", "message_id", ...}.

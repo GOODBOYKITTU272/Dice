@@ -191,6 +191,13 @@ class TelegramProvider:
         text = f"Couldn't complete this application.\n\n{job['title']}\n{job.get('company_name') or ''}\n\n{reason}".rstrip()
         return self._send(text)
 
+    def send_reconnect_required(self, application_id: str) -> str:
+        text = "🔐 Dice needs to be reconnected\n\nYour application is saved.\nReconnect Dice and I'll continue automatically."
+        return self._send(text)
+
+    def send_reconnect_success(self, application: dict, job: dict) -> str:
+        return self._send(f"✅ Dice connected\n\nI'm continuing your application for {job['title']} now.")
+
     def extract_chat_id(self, raw_event: dict) -> str | None:
         """Only used for sender resolution (attention.channels), never
         for correlating an application/question -- that stays entirely

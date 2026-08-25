@@ -280,3 +280,104 @@ def offer_job_if_ready(provider, candidate_id: str, dice_job_id: str) -> dict:
     add_event(application["id"], event_type="readiness_check", step="READINESS_OFFERABLE", message="all pre-offer checks passed")
     notify_job_offer(provider, application["id"])
     return {"offered": True, "application_id": application["id"], "readiness": result}
+
+
+def reconnect_dice(provider, candidate_id: str) -> dict:
+    """Phase 8D: the manual-trigger stand-in for the real interactive
+    "Reconnect Dice" flow. Deferred, not skipped: Browserless's LiveURL
+    (the feature that would let a candidate log into Dice directly and
+    have us positively verify it) requires a paid plan we don't have,
+    confirmed live 2026-08-25 ("Your plan does not support Live URLs").
+    Swappable by design -- whatever eventually triggers a real
+    interactive login success (a paid LiveURL flow, or anything else)
+    should call this exact function, unchanged, as its completion step;
+    right now the trigger is simply "a human refreshed
+    DICE_AUTH_COOKIES_JSON and asks us to check."
+
+    Never trusts "the login page disappeared" -- runs one short-lived,
+    bounded Browserless session through the SAME canonical auth-
+    classification path (navigator.open_job, its own reload-retry
+    included) real application processing uses, and only records what
+    that positively observed. The session is a few minutes, never held
+    open (cost control)."""
+    from playwright.sync_api import sync_playwright
+
+    from dice_browser.browserless_session import create_session, load_dice_cookies, stop_session, to_playwright_cookies
+    from dice_browser.navigator import open_job
+    from dice_browser.worker import _record_auth_health
+
+    raw_cookies = load_dice_cookies()
+    if not raw_cookies:
+        return {"reconnected": False, "reason": "no Dice auth state configured"}
+
+    client = get_supabase_client()
+    any_job = client.table("dice_jobs").select("canonical_url").limit(1).execute().data
+    if not any_job:
+        return {"reconnected": False, "reason": "no known Dice job to verify against"}
+    canonical_url = any_job[0]["canonical_url"]
+
+    session = create_session(ttl_ms=180000, process_keep_alive_ms=60000)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.connect_over_cdp(session["connect"])
+            context = browser.contexts[0] if browser.contexts else browser.new_context()
+            context.add_cookies(to_playwright_cookies(raw_cookies))
+            page = context.new_page()
+            nav_result = open_job(page, canonical_url)
+            _record_auth_health(candidate_id, nav_result)
+            browser.close()
+    finally:
+        stop_session(session.get("stop"))
+
+    if not nav_result.authenticated:
+        return {"reconnected": False, "reason": nav_result.evidence}
+
+    resumed = _resume_interrupted_applications(provider, candidate_id)
+    return {"reconnected": True, "resumed_application_ids": resumed}
+
+
+def _resume_interrupted_applications(provider, candidate_id: str) -> list[str]:
+    """Distinguishes already-authorized, interrupted applications
+    (FAILED_RETRYABLE with error_code=AUTH_REQUIRED -- the candidate
+    already tapped Apply) from held, not-yet-offered opportunities
+    (AWAITING_USER_DECISION, blocked pre-offer by readiness -- the
+    candidate was never asked). Only the former are auto-resumed here;
+    re-offering a held opportunity is a separate, deliberate
+    offer_job_if_ready() call per job (spec: "avoid blasting every held
+    opportunity simultaneously").
+
+    requeue_failed_application() alone only flips status -- the worker
+    claims RUNS, not raw QUEUED applications (a real gap found earlier
+    tonight) -- so a fresh run is always created too, preserving the
+    ORIGINAL run's submission_policy rather than assuming one, since
+    resuming must never grant a different authorization than the
+    candidate's original Apply tap did."""
+    from db.application_repository import requeue_failed_application
+    from attention.service import notify_reconnect_success
+
+    client = get_supabase_client()
+    stuck = (
+        client.table("applications")
+        .select("id, run_id")
+        .eq("candidate_id", candidate_id)
+        .eq("status", "FAILED_RETRYABLE")
+        .eq("error_code", "AUTH_REQUIRED")
+        .execute()
+        .data
+    )
+    resumed = []
+    for row in stuck:
+        submission_policy = "AUTHORIZED_AUTONOMOUS"
+        if row.get("run_id"):
+            old_run = run_registry.get_run(row["run_id"])
+            if old_run and old_run.get("submission_policy"):
+                submission_policy = old_run["submission_policy"]
+
+        requeue_failed_application(row["id"])
+        run_registry.create_run([row["id"]], candidate_id, submission_policy=submission_policy)
+        try:
+            notify_reconnect_success(provider, row["id"])
+        except Exception:
+            pass
+        resumed.append(row["id"])
+    return resumed

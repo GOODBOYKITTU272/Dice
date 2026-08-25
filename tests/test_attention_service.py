@@ -14,7 +14,7 @@ import uuid
 import pytest
 
 from attention.models import AttentionAction, NormalizedEvent
-from attention.service import UnresolvableEventError, handle_apply, handle_confirm, handle_edit, handle_event, handle_skip, notify_job_offer, notify_next_missing_question
+from attention.service import UnresolvableEventError, handle_apply, handle_confirm, handle_edit, handle_event, handle_skip, notify_job_offer, notify_next_missing_question, notify_reconnect_required, notify_reconnect_success
 from db.application_repository import create_job_offer, get_application, update_application_status, upsert_dice_job
 from db.intervention_repository import (
     ApplicationReadiness,
@@ -51,6 +51,14 @@ class _FakeProvider:
 
     def send_submission_failure(self, application, job, reason):
         self.sent.append(("failure", application["id"], reason))
+        return f"msg-{len(self.sent)}"
+
+    def send_reconnect_required(self, application_id):
+        self.sent.append(("reconnect_required", application_id))
+        return f"msg-{len(self.sent)}"
+
+    def send_reconnect_success(self, application, job):
+        self.sent.append(("reconnect_success", application["id"]))
         return f"msg-{len(self.sent)}"
 
     def send_apply_ack(self, application_id):
@@ -549,3 +557,30 @@ def test_edit_allows_a_fresh_confirmation_card_for_the_next_answer(live_client):
     handle_answer(provider, NormalizedEvent(channel="TELEGRAM", external_message_id=str(uuid.uuid4()), action=AttentionAction.ANSWER, application_id=application["id"], question_id="q-1", raw_text="No"))
 
     assert len([s for s in provider.sent if s[0] == "answer_confirmation"]) == 2
+
+
+# Phase 8D: reconnect notifications -- distinct from generic submission
+# failure, and idempotent per application+channel (never spammed on a
+# later worker poll for the same still-unresolved auth condition).
+def test_notify_reconnect_required_sends_once_not_twice(live_client):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    application = create_job_offer(candidate_id, job["id"])
+    provider = _FakeProvider()
+
+    notify_reconnect_required(provider, application["id"])
+    notify_reconnect_required(provider, application["id"])  # simulates a second worker poll
+
+    assert provider.sent == [("reconnect_required", application["id"])]
+
+
+def test_notify_reconnect_success_sends_once_not_twice(live_client):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    application = create_job_offer(candidate_id, job["id"])
+    provider = _FakeProvider()
+
+    notify_reconnect_success(provider, application["id"])
+    notify_reconnect_success(provider, application["id"])
+
+    assert provider.sent == [("reconnect_success", application["id"])]
