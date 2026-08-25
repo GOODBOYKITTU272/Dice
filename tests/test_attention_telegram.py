@@ -88,7 +88,33 @@ def test_send_job_offer_includes_apply_and_skip_buttons(monkeypatch):
     assert "<b>Java Developer</b>" in payload["text"]
     assert payload["parse_mode"] == "HTML"
     buttons = payload["reply_markup"]["inline_keyboard"][0]
-    assert [b["callback_data"] for b in buttons] == ["APPLY", "SKIP"]
+    # Phase M9 fix: carries the exact application_id being offered, not a
+    # bare action -- see parse_inbound_application_id_callback below for
+    # why a bare "APPLY"/"SKIP" is no longer safe.
+    assert [b["callback_data"] for b in buttons] == ["APPLY:app-1", "SKIP:app-1"]
+
+
+def test_parse_inbound_apply_callback_with_application_id_carries_it(monkeypatch):
+    provider = TelegramProvider()
+    event = provider.parse_inbound({"update_id": 10, "callback_query": {"data": "APPLY:app-42"}})
+    assert event.action == AttentionAction.APPLY
+    assert event.application_id == "app-42"
+
+
+def test_parse_inbound_skip_callback_with_application_id_carries_it(monkeypatch):
+    provider = TelegramProvider()
+    event = provider.parse_inbound({"update_id": 11, "callback_query": {"data": "SKIP:app-42"}})
+    assert event.action == AttentionAction.SKIP
+    assert event.application_id == "app-42"
+
+
+def test_parse_inbound_bare_apply_without_id_still_works(monkeypatch):
+    """Backward compatibility: any offer already sent before this fix
+    used a bare "APPLY"/"SKIP" button -- tapping it must not break."""
+    provider = TelegramProvider()
+    event = provider.parse_inbound({"update_id": 12, "callback_query": {"data": "APPLY"}})
+    assert event.action == AttentionAction.APPLY
+    assert event.application_id is None
 
 
 def test_send_job_offer_escapes_html_special_characters(monkeypatch):

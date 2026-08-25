@@ -154,7 +154,13 @@ class TelegramProvider:
             tags.append("⚡ Easy Apply")
         tags_line = f"\n{'  '.join(tags)}" if tags else ""
         text = f"🟣 I found something promising for you\n\n<b>{title}</b> — {company}{tags_line}\n\nWant me to apply?"
-        return self._send(text, buttons=[[("Apply", "APPLY"), ("Skip", "SKIP")]], parse_mode="HTML")
+        # Embeds the exact application_id being offered ("APPLY:<uuid>",
+        # well under Telegram's 64-byte callback_data limit) -- see
+        # parse_inbound's own comment for why a bare "APPLY"/"SKIP" is no
+        # longer safe once more than one offer can be open at once.
+        application_id = application["id"]
+        buttons = [[("Apply", f"APPLY:{application_id}"), ("Skip", f"SKIP:{application_id}")]]
+        return self._send(text, buttons=buttons, parse_mode="HTML")
 
     def send_apply_ack(self, application_id: str) -> str:
         return self._send("Checking the application...")
@@ -220,6 +226,21 @@ class TelegramProvider:
                 return NormalizedEvent(
                     channel=self.channel, external_message_id=external_message_id,
                     action=AttentionAction.ANSWER, raw_text=data[len("ANSWER:"):],
+                )
+            # Phase M9 fix, real production bug: APPLY/SKIP buttons now
+            # carry their own application_id ("APPLY:<uuid>") rather than
+            # relying solely on "the candidate's most recent open offer"
+            # -- that fallback silently misrouted a tap on an OLD card to
+            # a newer, already-resolved application the moment more than
+            # one offer existed at once (live-reproduced 2026-08-25: every
+            # tap on two-day-old cards landed on a same-day test job
+            # instead). Bare "APPLY"/"SKIP" (no ":") is kept working for
+            # any already-sent button using the old format.
+            if ":" in data and data.split(":", 1)[0] in ("APPLY", "SKIP"):
+                action_str, application_id = data.split(":", 1)
+                return NormalizedEvent(
+                    channel=self.channel, external_message_id=external_message_id,
+                    action=AttentionAction(action_str), application_id=application_id,
                 )
             action = AttentionAction(data)
             return NormalizedEvent(channel=self.channel, external_message_id=external_message_id, action=action)
