@@ -211,6 +211,40 @@ def test_max_unresolved_offers_holds_extra_eligible_jobs(monkeypatch):
     assert summary["skipped_capacity"] == 1
 
 
+def test_capacity_skipped_job_is_not_lost_and_offers_once_capacity_frees_and_it_recurs(monkeypatch):
+    """A job held only for capacity is never given an application row --
+    the SAME job re-discovered on a later cycle, once capacity has freed
+    up, is evaluated fresh through the real gate and offered exactly
+    once. Never a second/duplicate offer for it later still."""
+    candidate_id = str(uuid.uuid4())
+    blocker_app = create_job_offer(candidate_id, _make_job()["id"])  # the one occupying capacity
+    job = _make_job()
+    monkeypatch.setattr("dice.discovery.run_discovery", lambda role, max_results, location, printer=None: [_discovery_row(job)])
+    monkeypatch.setattr("attention.routing.resolve_primary_provider", lambda cid: _FakeProvider())
+    calls = []
+    monkeypatch.setattr("readiness.offer_job_if_ready", lambda provider, cid, jid: calls.append(jid) or {"offered": True})
+
+    # Cycle 1: capacity full (max_unresolved_offers=1 for this test) -- the
+    # job is discovered and persisted (already true via _make_job/upsert
+    # inside run_discovery, mocked here) but never offered.
+    first = discovery_daemon.run_one_discovery_cycle(candidate_id, max_unresolved_offers=1)
+    assert first["skipped_capacity"] == 1
+    assert calls == []
+
+    # The blocking card gets resolved (Skip/Apply -- whatever the real
+    # user decision is), freeing capacity.
+    from db.application_repository import update_application_status
+
+    update_application_status(blocker_app["id"], "SKIPPED")
+
+    # Cycle 2: the SAME job is re-discovered (still live on Dice) --
+    # capacity is now free, so it's evaluated fresh and offered.
+    second = discovery_daemon.run_one_discovery_cycle(candidate_id, max_unresolved_offers=1)
+    assert second["skipped_capacity"] == 0
+    assert second["offers_produced"] == 1
+    assert calls == [job["id"]]  # offered exactly once, not twice, across both cycles
+
+
 def test_capacity_check_is_reevaluated_between_jobs_in_the_same_cycle(monkeypatch):
     """Proves pacing is live, not a snapshot taken once at cycle start --
     an offer produced by job A must count toward capacity before job B is
