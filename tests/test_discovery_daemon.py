@@ -16,7 +16,7 @@ import uuid
 import pytest
 
 import dice_browser.discovery_daemon as discovery_daemon
-from db.application_repository import create_job_offer, upsert_dice_job
+from db.application_repository import create_job_offer, update_application_status, upsert_dice_job
 from db.supabase_client import get_supabase_client
 
 _created_job_ids: list[str] = []
@@ -191,6 +191,59 @@ def test_a_blocked_offer_is_never_retried_within_the_same_cycle_as_a_new_row(mon
     assert calls == [job["id"]]  # went through the real gate exactly once -- never bypassed or retried
     assert summary["held"] == 1
     assert summary["offers_produced"] == 0
+
+
+def _advance_to(application_id: str, target_status: str) -> None:
+    """Walks the real, existing status machine (db.application_repository.
+    STATUS_TRANSITIONS) from AWAITING_USER_DECISION to any terminal/non-
+    capacity status a real application could genuinely reach -- never
+    writes a status directly, so this is exactly as strict as production
+    (an invalid path here would raise InvalidStatusTransitionError, same
+    as in production)."""
+    if target_status == "SKIPPED":
+        update_application_status(application_id, "SKIPPED")
+        return
+    update_application_status(application_id, "QUEUED")
+    if target_status == "QUEUED":
+        return
+    update_application_status(application_id, "PROCESSING", worker_id="test-discovery-daemon-worker")
+    if target_status == "PROCESSING":
+        return
+    if target_status == "NEEDS_INPUT":
+        update_application_status(application_id, "NEEDS_INPUT")
+        return
+    if target_status == "FAILED_RETRYABLE":
+        update_application_status(application_id, "FAILED_RETRYABLE")
+        return
+    if target_status == "FAILED":
+        update_application_status(application_id, "FAILED")
+        return
+    if target_status == "SUBMITTED":
+        update_application_status(application_id, "SUBMITTING")
+        update_application_status(application_id, "SUBMITTED")
+        return
+    raise ValueError(f"no known path to {target_status!r} for this test helper")
+
+
+# 3. capacity count must use canonical actionable state only -- every
+# status a real application can be in AFTER the original Apply/Skip
+# decision, or after it was never actioned but has since moved on, must
+# NOT count toward the max-2 unresolved-card cap. Only a genuine, still-
+# pending AWAITING_USER_DECISION counts.
+@pytest.mark.parametrize("status", ["SKIPPED", "QUEUED", "PROCESSING", "NEEDS_INPUT", "FAILED_RETRYABLE", "FAILED", "SUBMITTED"])
+def test_unresolved_capacity_count_excludes_every_non_awaiting_status(status):
+    candidate_id = str(uuid.uuid4())
+    app = create_job_offer(candidate_id, _make_job()["id"])
+    _advance_to(app["id"], status)
+
+    assert discovery_daemon._unresolved_offer_count(candidate_id) == 0
+
+
+def test_unresolved_capacity_count_includes_only_genuine_awaiting_decision():
+    candidate_id = str(uuid.uuid4())
+    create_job_offer(candidate_id, _make_job()["id"])  # left untouched -- genuinely still pending
+
+    assert discovery_daemon._unresolved_offer_count(candidate_id) == 1
 
 
 def test_max_unresolved_offers_holds_extra_eligible_jobs(monkeypatch):
