@@ -144,6 +144,81 @@ def test_notify_job_offer_is_idempotent(live_client):
     assert len([s for s in provider.sent if s[0] == "job_offer"]) == 1
 
 
+# ── Phase M9: reconciliation -- an offer whose only outbound event
+# landed on a non-primary channel must still reach the real primary,
+# without fabricating a decision or creating a second application.
+# Real production finding 2026-08-25: two offers sent during earlier
+# iMessage-channel testing never reached Telegram (the actual configured
+# primary) at all.
+from attention.service import ensure_offer_reached_primary_channel  # noqa: E402
+from attention.events import record_outbound  # noqa: E402
+
+
+def test_ensure_offer_reached_primary_channel_redelivers_when_only_on_a_secondary_channel(monkeypatch):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    offer = create_job_offer(candidate_id, job["id"])
+    # simulates the real historical bug: the only outbound JOB_OFFER
+    # event is on IMESSAGE, never TELEGRAM.
+    record_outbound(offer["id"], candidate_id, "IMESSAGE", "JOB_OFFER", "loopmessage-msg-1")
+
+    telegram_provider = _FakeProvider()
+    telegram_provider.channel = "TELEGRAM"
+    monkeypatch.setattr("attention.routing.resolve_primary_provider", lambda cid: telegram_provider)
+
+    result = ensure_offer_reached_primary_channel(offer["id"])
+
+    assert result == {"redelivered": True, "channel": "TELEGRAM"}
+    assert telegram_provider.sent == [("job_offer", offer["id"])]
+    client = get_supabase_client()
+    apps = client.table("applications").select("id").eq("candidate_id", candidate_id).execute().data
+    assert len(apps) == 1  # never created a second application
+
+
+def test_ensure_offer_reached_primary_channel_is_a_noop_when_already_there(monkeypatch):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    offer = create_job_offer(candidate_id, job["id"])
+    telegram_provider = _FakeProvider()
+    telegram_provider.channel = "TELEGRAM"
+    monkeypatch.setattr("attention.routing.resolve_primary_provider", lambda cid: telegram_provider)
+    notify_job_offer(telegram_provider, offer["id"])  # the normal, already-correct case
+
+    result = ensure_offer_reached_primary_channel(offer["id"])
+
+    assert result == {"redelivered": False, "reason": "already reached the primary channel"}
+    assert len([s for s in telegram_provider.sent if s[0] == "job_offer"]) == 1  # not sent twice
+
+
+def test_ensure_offer_reached_primary_channel_is_a_noop_once_no_longer_awaiting_decision(monkeypatch):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    offer = create_job_offer(candidate_id, job["id"])
+    record_outbound(offer["id"], candidate_id, "IMESSAGE", "JOB_OFFER", "loopmessage-msg-1")
+    handle_skip(offer["id"])  # the candidate already resolved it via the secondary channel
+
+    telegram_provider = _FakeProvider()
+    telegram_provider.channel = "TELEGRAM"
+    monkeypatch.setattr("attention.routing.resolve_primary_provider", lambda cid: telegram_provider)
+
+    result = ensure_offer_reached_primary_channel(offer["id"])
+
+    assert result["redelivered"] is False
+    assert "SKIPPED" in result["reason"]
+    assert telegram_provider.sent == []  # never resurrects an already-decided offer
+
+
+def test_ensure_offer_reached_primary_channel_is_a_noop_when_no_primary_channel_configured(monkeypatch):
+    candidate_id = str(uuid.uuid4())
+    job = _make_test_job()
+    offer = create_job_offer(candidate_id, job["id"])
+    monkeypatch.setattr("attention.routing.resolve_primary_provider", lambda cid: None)
+
+    result = ensure_offer_reached_primary_channel(offer["id"])
+
+    assert result == {"redelivered": False, "reason": "no primary channel configured"}
+
+
 # ── Skip ───────────────────────────────────────────────────────────────
 
 

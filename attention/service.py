@@ -93,6 +93,39 @@ def notify_job_offer(provider: AttentionProvider, application_id: str) -> None:
     record_outbound(application_id, application["candidate_id"], provider.channel, MessageType.JOB_OFFER.value, external_id)
 
 
+def ensure_offer_reached_primary_channel(application_id: str) -> dict:
+    """Phase M9 reconciliation, real production finding 2026-08-25: two
+    offers sent during earlier iMessage-channel testing landed only on
+    the candidate's SECONDARY channel (iMessage) -- Telegram, the actual
+    configured primary, never received a card for them at all. A
+    candidate who only checks Telegram has no way to act on those, even
+    though the underlying opportunity is still perfectly real and valid.
+
+    Never creates a second application, never fabricates a decision --
+    only ensures the SAME existing offer also reaches the candidate's
+    current primary channel, through the exact same notify_job_offer()
+    path (and its own per-channel idempotency) every other offer uses.
+    A no-op if the primary channel already has this offer, if the
+    application isn't still AWAITING_USER_DECISION, or if no primary
+    channel is configured at all -- never guesses or fabricates a
+    channel to send to."""
+    from attention.routing import resolve_primary_provider
+
+    application = get_application(application_id)
+    if application["status"] != "AWAITING_USER_DECISION":
+        return {"redelivered": False, "reason": f"application is {application['status']!r}, not AWAITING_USER_DECISION"}
+
+    provider = resolve_primary_provider(application["candidate_id"])
+    if provider is None:
+        return {"redelivered": False, "reason": "no primary channel configured"}
+
+    if already_sent_outbound(application_id, provider.channel, MessageType.JOB_OFFER.value):
+        return {"redelivered": False, "reason": "already reached the primary channel"}
+
+    notify_job_offer(provider, application_id)
+    return {"redelivered": True, "channel": provider.channel}
+
+
 def notify_next_missing_question(provider: AttentionProvider, application_id: str) -> None:
     """Sends exactly one question -- the oldest OPEN intervention that
     hasn't already been asked over this channel. No-ops if none are
