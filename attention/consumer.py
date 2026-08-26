@@ -9,6 +9,7 @@ re-processes or silently skips updates.
 """
 from __future__ import annotations
 
+from attention.browser_login_callback import handle_login_callback, is_login_callback
 from attention.channels import consume_link_code, resolve_candidate_for_identity
 from attention.events import already_processed_inbound
 from attention.providers.imessage import IMessageProvider, read_new_messages
@@ -85,6 +86,16 @@ def process_telegram_update(provider: TelegramProvider, raw_update: dict) -> str
         message_id = (callback.get("message") or {}).get("message_id")
         if message_id is not None:
             provider.clear_buttons(chat_id, str(message_id))
+
+        # Phase F2B (revised): AUTH_APPROVE:/AUTH_DENY: are a browser
+        # login challenge, never a job-offer action -- handled entirely
+        # here and returned early, before link-code consumption,
+        # resolve_candidate_for_identity, or parse_inbound ever run, so
+        # this can structurally never reach AttentionAction/attention.
+        # service's Apply/Skip/Confirm/Edit/NEEDS_INPUT dispatch.
+        callback_data = callback.get("data", "")
+        if is_login_callback(callback_data):
+            return handle_login_callback(callback_data, chat_id)
 
     text = (raw_update.get("message") or {}).get("text")
     linked_candidate_id = _try_consume_as_link_code("TELEGRAM", text, chat_id) if text else None

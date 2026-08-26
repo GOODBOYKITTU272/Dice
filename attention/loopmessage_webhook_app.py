@@ -18,6 +18,11 @@ actually sends is the bare secret value in `Authorization` -- no
 API key directly in that same header. If the secret isn't configured
 here, the header check is skipped (dev-convenience) -- never enforced
 silently wrong, but also never blocking local/offline testing.
+
+Phase F2B: also hosts the authenticated /me/* routes (attention.me_routes)
+and the public /auth/bootstrap/* routes (attention.auth_routes) --
+reusing this already-deployed service instead of standing up a new
+Railway service for a handful of endpoints.
 """
 from __future__ import annotations
 
@@ -25,9 +30,13 @@ import os
 
 from flask import Flask, request
 
+from attention.auth_routes import auth_bp
 from attention.consumer import process_loopmessage_webhook
+from attention.me_routes import me_bp
 
 app = Flask(__name__)
+app.register_blueprint(me_bp)
+app.register_blueprint(auth_bp)
 
 _SECRET_ENV_VAR = "LOOPMESSAGE_WEBHOOK_SECRET"
 _SECRET_HEADER = "Authorization"

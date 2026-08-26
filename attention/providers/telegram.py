@@ -197,6 +197,22 @@ class TelegramProvider:
         text = f"Couldn't complete this application.\n\n{job['title']}\n{job.get('company_name') or ''}\n\n{reason}".rstrip()
         return self._send(text)
 
+    def send_login_approval_request(self, challenge_id: str) -> str:
+        """Phase F2B (revised): a browser login challenge, not a job
+        offer -- deliberately its own callback namespace ("AUTH_APPROVE:"
+        / "AUTH_DENY:") so it can never be confused with APPLY:/SKIP: by
+        anything downstream. Intercepted entirely in attention/consumer.py
+        before parse_inbound() ever runs; never reaches AttentionAction."""
+        text = "Someone is trying to sign in to your ApplyWizz account.\n\nWas this you?"
+        buttons = [[("Approve sign in", f"AUTH_APPROVE:{challenge_id}"), ("Deny", f"AUTH_DENY:{challenge_id}")]]
+        return self._send(text, buttons=buttons)
+
+    def send_login_approved_confirmation(self) -> str:
+        return self._send("✅ Signed in. You can return to ApplyWizz now.")
+
+    def send_login_denied_confirmation(self) -> str:
+        return self._send("Sign-in request denied.")
+
     def send_reconnect_required(self, application_id: str) -> str:
         text = "🔐 Dice needs to be reconnected\n\nYour application is saved.\nReconnect Dice and I'll continue automatically."
         return self._send(text)

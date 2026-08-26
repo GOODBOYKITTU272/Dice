@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import itertools
 import os
+import threading
 import uuid
 from datetime import datetime, timezone
 
@@ -225,6 +226,166 @@ def fake_intervention_repo(monkeypatch):
     monkeypatch.setattr(app_repo, "get_supabase_client", lambda: client)
     monkeypatch.setattr(iv_repo, "get_supabase_client", lambda: client)
     return iv_repo
+
+
+@pytest.fixture
+def dice_session_secret(monkeypatch):
+    """Phase F2B: configures DICE_CUSTOMER_SESSION_SECRET so tests can
+    issue and verify real Dice-owned session tokens end-to-end instead of
+    monkeypatching the verifier. Returns the secret value itself so a
+    test can assert it never leaks into a response body."""
+    secret = "test-dice-session-secret-do-not-use-in-prod"
+    monkeypatch.setenv("DICE_CUSTOMER_SESSION_SECRET", secret)
+    return secret
+
+
+class _AuthRpcCall:
+    """Mirrors the real atomic-claim Postgres functions in
+    20260826010000_browser_bootstrap_and_login_challenge.sql: each is
+    exactly "UPDATE ... WHERE <still-eligible> RETURNING *" against a
+    single row, so the fake reproduces the same still-eligible check
+    in-process rather than a bare unconditional update."""
+
+    def __init__(self, store: "FakeAuthClient", name: str, params: dict):
+        self._store = store
+        self._name = name
+        self._params = params
+
+    def execute(self):
+        # A real Postgres row lock is what makes the production functions
+        # (20260826010000_browser_bootstrap_and_login_challenge.sql) safe
+        # under concurrent callers -- this in-memory fake has no such
+        # guarantee on its own (plain Python read-then-write across
+        # threads), so it takes an explicit lock to actually model that,
+        # rather than "usually passing" on GIL scheduling luck.
+        with self._store.lock:
+            return self._execute_locked()
+
+    def _execute_locked(self):
+        now = datetime.now(timezone.utc).isoformat()
+
+        if self._name == "consume_browser_bootstrap_code":
+            rows = self._store.tables["browser_bootstrap_codes"]
+            match = next(
+                (
+                    r
+                    for r in rows
+                    if r["code_hash"] == self._params["p_code_hash"]
+                    and r["consumed_at"] is None
+                    and r["expires_at"] > now
+                ),
+                None,
+            )
+            if match is None:
+                return _Result([])
+            match["consumed_at"] = now
+            return _Result([copy.deepcopy(match)])
+
+        if self._name in (
+            "approve_browser_login_challenge",
+            "deny_browser_login_challenge",
+            "expire_browser_login_challenge",
+            "consume_browser_login_challenge",
+        ):
+            rows = self._store.tables["browser_login_challenges"]
+            match = next((r for r in rows if r["id"] == self._params["p_challenge_id"]), None)
+            if match is None:
+                return _Result([])
+
+            if self._name == "approve_browser_login_challenge":
+                if match["status"] != "PENDING" or match["expires_at"] <= now:
+                    return _Result([])
+                match["status"] = "APPROVED"
+                match["approved_at"] = now
+            elif self._name == "deny_browser_login_challenge":
+                if match["status"] != "PENDING":
+                    return _Result([])
+                match["status"] = "DENIED"
+                match["denied_at"] = now
+            elif self._name == "expire_browser_login_challenge":
+                if match["status"] != "PENDING":
+                    return _Result([])
+                match["status"] = "EXPIRED"
+            elif self._name == "consume_browser_login_challenge":
+                if match["status"] != "APPROVED" or match["expires_at"] <= now:
+                    return _Result([])
+                match["status"] = "CONSUMED"
+                match["consumed_at"] = now
+            return _Result([copy.deepcopy(match)])
+
+        raise AssertionError(f"unsupported rpc {self._name}")
+
+
+class FakeAuthClient:
+    """In-memory stand-in for the browser_bootstrap_codes /
+    browser_login_challenges tables and their RPCs. Reuses the generic
+    _Query/_Result machinery above (insert/select/eq/update), same as
+    FakeSupabaseClient, but deliberately a separate class -- these tables
+    and RPCs are unrelated to the application-claiming ones that class
+    already models."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.tables = {
+            "browser_bootstrap_codes": [],
+            "browser_login_challenges": [],
+            # Also modeled here (not just the two F2B-revised tables
+            # above) so a test can set up a verified Telegram binding via
+            # the real attention.channels functions against this same
+            # in-memory store, exactly as production data would look.
+            "candidate_attention_channels": [],
+            "attention_link_codes": [],
+        }
+
+    def table(self, name):
+        return _Query(self, name)
+
+    def rpc(self, name, params):
+        return _AuthRpcCall(self, name, params)
+
+    def _prepare_row(self, table, payload):
+        row = dict(payload)
+        row.setdefault("id", str(uuid.uuid4()))
+        now = datetime.now(timezone.utc).isoformat()
+        row.setdefault("created_at", now)
+        if table == "browser_bootstrap_codes":
+            row.setdefault("consumed_at", None)
+        if table == "browser_login_challenges":
+            row.setdefault("status", "PENDING")
+            row.setdefault("approved_at", None)
+            row.setdefault("denied_at", None)
+            row.setdefault("consumed_at", None)
+        if table == "candidate_attention_channels":
+            row.setdefault("destination", None)
+            row.setdefault("is_primary", False)
+            row.setdefault("is_enabled", True)
+            row.setdefault("verified_at", None)
+            row.setdefault("updated_at", now)
+        if table == "attention_link_codes":
+            row.setdefault("consumed_at", None)
+        return row
+
+    def _check_unique(self, table, row):
+        pass
+
+
+@pytest.fixture
+def fake_auth_client(monkeypatch):
+    """Patches db.browser_bootstrap, db.browser_login_challenge, and
+    attention.channels (primary_channel_for_candidate /
+    resolve_candidate_for_identity aren't exercised by every test that
+    needs this fixture, but sharing one client keeps rows consistent
+    when a test does need both) to use the same in-memory FakeAuthClient
+    instance."""
+    import attention.channels as channels
+    import db.browser_bootstrap as bootstrap
+    import db.browser_login_challenge as challenge
+
+    client = FakeAuthClient()
+    monkeypatch.setattr(bootstrap, "get_supabase_client", lambda: client)
+    monkeypatch.setattr(challenge, "get_supabase_client", lambda: client)
+    monkeypatch.setattr(channels, "get_supabase_client", lambda: client)
+    return client
 
 
 @pytest.fixture
